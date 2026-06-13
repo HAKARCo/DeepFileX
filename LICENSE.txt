@@ -1,4 +1,25 @@
 ========================================================================
+             DeepFileX 1.0 Proprietary License Agreement
+                   Copyright (c) 2026 HAKAR (JAS). All Rights Reserved.
+========================================================================
+
+All intellectual property rights, copyrights, and ownership of this software and associated documentation (the "Software") are exclusively owned by the original author, 'HAKAR'.
+
+This Software is licensed for personal and non-commercial use only. Under no circumstances may it be distributed, duplicated, or modified in any manner not explicitly permitted by this License Agreement.
+
+Article 1 (Rights and Restrictions)
+1. The user is granted the right to run and use the Software solely for non-commercial purposes.
+2. Redistribution, reproduction, rental, lease, assignment, or sub-licensing of the Software, in whole or in part, without the prior written consent of the copyright holder 'HAKAR', is strictly prohibited.
+3. Selling, distributing for a fee, or commercializing the Software for profit is strictly prohibited by law. Violations will lead to legal action, including claims for damages and civil/criminal liability.
+4. Users shall not reverse engineer, decompile, disassemble, or attempt to extract the source code of the Software.
+
+Article 2 (Warranty and Disclaimer)
+The Software is provided "AS IS" without warranty of any kind, express or implied, including but not limited to the warranties of merchantability or fitness for a particular purpose. In no event shall the author be liable for any claims, damages, or other liability arising from the use of the Software.
+
+Article 3 (Governing Law and Jurisdiction)
+This Agreement shall be governed by and construed in accordance with the laws of the Republic of Korea. Any disputes arising out of or in connection with this Agreement shall be subject to the exclusive jurisdiction of the competent court of the copyright holder 'HAKAR's choice.
+
+========================================================================
              DeepFileX 1.0 독점 저작권 명세 및 라이선스 약관
                    Copyright (c) 2026 HAKAR (JAS). All Rights Reserved.
 ========================================================================
