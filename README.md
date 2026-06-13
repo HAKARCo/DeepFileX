@@ -1,6 +1,6 @@
 # 🔷 DeepFileX
 
-**DeepFileX** - Next-Generation File Search and Analysis Solution
+**DeepFileX** - File **Contents** Search and Analysis Solution
 > **Latest**: v1.0.0 (2026-06-13) 
 > [![Latest Release](https://img.shields.io/github/v/release/HAKARCo/DeepFileX)](https://github.com/HAKARCo/DeepFileX/releases)
 > [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE.txt)
@@ -39,6 +39,23 @@ To install DeepFileX on your Windows PC:
 - **Light/Dark Mode**: Eye-friendly themes.
 - **Intuitive Interface**: Clean, clutter-free user interface.
 - **Real-time Progress**: Live status gauge and time estimation.
+
+---
+
+## 📁 Supported File Formats
+
+DeepFileX supports indexing and full-text content searching for a wide range of file extensions.
+
+| Category | Type / Extensions | Search Level |
+| :--- | :--- | :---: |
+| **📄 Documents** | `.pdf`, `.docx`, `.doc`, `.pptx`, `.ppt`, `.xlsx`, `.xls`, `.rtf`, `.tex`, `.odt`, `.ods`, `.odp`, `.pages`, `.numbers`, `.key` | **Full-Text** |
+| **🇰🇷 Korean Docs** | `.hwp`, `.hwpx` | **Full-Text** |
+| **📧 Emails** | `.pst`, `.eml`, `.msg` | **Full-Text** |
+| **⚙️ Configurations** | `.yaml`, `.yml`, `.ini`, `.cfg`, `.conf`, `.toml`, `.env`, `.properties`, `.gitignore`, `.editorconfig` | **Full-Text** |
+| **💻 Code & Scripts** | `.py`, `.js`, `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.php`, `.rb`, `.go`, `.rs`, `.swift`, `.kt`, `.sql`, `.ps1`, `.sh`, `.bat`, `.dart`, `.scala`, `.lua`, `.pl`, `.asm` | **Full-Text** |
+| **🎨 Web & Templates** | `.html`, `.css`, `.vue`, `.tsx`, `.jsx`, `.scss`, `.less`, `.ejs`, `.pug`, `.hbs`, `.mustache`, `.jinja`, `.twig` | **Full-Text** |
+| **📦 Archives** | `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`, `.xz`, `.lz`, `.cab`, `.iso` | *Filename Only* |
+| **🖼️ Images & Design** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.sketch` | *Filename Only* |
 
 ---
 
