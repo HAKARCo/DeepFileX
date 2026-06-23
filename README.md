@@ -1,7 +1,7 @@
 # 🔷 DeepFileX
 
 **DeepFileX** - File **Contents** Search and Analysis Solution
-> **Latest**: v1.0.0 (2026-06-13) 
+> **Latest**: v1.1.0 (2026-06-23) 
 > [![Latest Release](https://img.shields.io/github/v/release/HAKARCo/DeepFileX)](https://github.com/HAKARCo/DeepFileX/releases)
 > [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE.txt)
 
@@ -18,7 +18,7 @@ By building a secure local database index using parallel multi-threaded scanning
 To install DeepFileX on your Windows PC:
 
 1. Go to the [Releases](https://github.com/HAKARCo/DeepFileX/releases) page.
-2. Download the latest installer version: `DeepFileX_v1.0.0_Setup.exe`.
+2. Download the latest installer version: `DeepFileX_v1.1.0_Setup.exe`.
 3. Run the installer and follow the instructions on your screen.
 
 ---
