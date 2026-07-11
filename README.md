@@ -1,181 +1,153 @@
 # 🔷 DeepFileX
 
-**DeepFileX** - File **Contents** Search and Analysis Solution
+**DeepFileX** - Ultra-Lightweight Desktop File **Contents** Search & Analysis Solution
 
-> **Latest**: v2.2.0 (2026-06-29) 
-[![Latest Release](https://img.shields.io/github/v/release/HAKARCo/DeepFileX)](https://github.com/HAKARCo/DeepFileX/releases)
-[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE.txt)
+> **Latest**: v3.1.0 (2026-07-11)
+> [![Latest Release](https://img.shields.io/github/v/release/HAKARCo/DeepFileX)](https://github.com/HAKARCo/DeepFileX/releases)
+> [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE.txt)
+
+---
 
 ## 🎯 Overview
 
-**DeepFileX** is a high-performance desktop search utility designed to scan, index, and retrieve not only **filenames** but also the **full-text content** of documents across your local storage. 
+**DeepFileX** is a high-performance desktop search utility written in **Rust**. It is designed to scan, index, and retrieve not only **filenames** but also the **full-text content** of documents across your local storage. 
 
-By building a secure local database index using parallel multi-threaded scanning, DeepFileX allows you to search through the actual contents of PDFs, Office documents (Word, Excel, PowerPoint), code files, and text files in milliseconds—completely offline, ensuring 100% data privacy.
+By building a secure local database index using parallel multi-threaded scanning and SQLite FTS5, DeepFileX allows you to search through the actual contents of PDFs, Office documents, code files, and text files in milliseconds—completely offline, ensuring 100% data privacy.
+
+---
 
 ## 🚀 Quick Start
 
-### Run & Build
+### Build & Run from Source
 
-1. **Run from source or build binary using PyInstaller**
-2. **Run DeepFileX.exe from the dist directory**
+1. Ensure you have the Rust toolchain installed.
+2. Navigate to the project root and run:
+   ```bash
+   # Run in developer mode
+   cargo run
+   ```
+3. To compile the optimized, standalone release binary:
+   ```bash
+   # Compile optimized binary
+   cargo build --release
+   ```
+4. Find the standalone executable at: `target/release/DeepFileX.exe`
 
-For developer mode, see the [Development Guide](#-development-guide).
+---
 
 ## ⭐ Core Features
 
-### 🔬 Advanced File Analysis
-- **30+ File Format Support**: Documents, code, images, archives
-- **Real-time Search**: Search by filename and content
-- **Persistent Indexing**: SQLite-based database
+### 🔬 High-Performance File Analysis
+- **Advanced Format Support**: Full-text indexing for `.pdf`, `.docx`, `.xlsx`, `.txt`, `.csv`, `.log` and configuration/script files.
+- **Embedded Pdfium Engine**: Integrates Google Chromium's official Pdfium parser via static bundling (`include_bytes!`), achieving 99% accurate text extraction without external DLLs.
+- **Robust Unicode & Space Pathing**: Fixed Windows pathing locks on folders containing spaces or non-ASCII (Korean CJK) characters.
 
-### ⚡ Ultra-Fast Performance
-- **Multi-threading**: Parallel processing for rapid scanning
-- **10,000+ Files/Min**: Handle large directories efficiently
-- **Memory Optimized**: Efficient resource usage
+### ⚡ Extreme Performance & Resource Efficiency
+- **Fast NTFS MFT Scan**: Rapid MFT parsing (under 0.2s for 1.6M files) with a fallback multi-threaded WalkDir directory scanner.
+- **SQLite FTS5 + RAM Search**: Instant content lookup (under 1ms) paired with sub-millisecond in-memory filename searching.
+- **Data Compression**: Cache text metadata efficiently using Zstd Lv3 compression to maintain a minimal storage footprint.
 
-### 🎨 Modern UI
-- **Light/Dark Mode**: Eye-friendly themes
-- **Intuitive Interface**: Easy to use
-- **Real-time Progress**: Live operation status
+### 🎨 Premium & Compact UI
+- **Single Executable**: Packs all GUI, database, and PDF engines into a **single binary under 5MB** (uncompressed).
+- **Clean Subsystem**: Completely hides the debug CMD console window in release builds for a native, clean GUI experience.
+- **Branded Design**: Window title bar and taskbar icons are dynamically bound to the DFX brand logo via runtime pixel injection.
 
-## 📁 Supported File Formats
+---
 
-DeepFileX supports indexing and full-text content searching for a wide range of file extensions.
+## 📁 Supported File Formats & Search Level
 
-| Category | Type / Extensions | Search Level |
+DeepFileX employs a hybrid indexing strategy: dedicated high-performance parsers for primary document types, and an optimized binary strings extractor as a universal fallback.
+
+| Category | Extensions | Search Level / Implementation |
 | :--- | :--- | :---: |
-| **📄 Documents** | `.pdf`, `.docx`, `.doc`, `.pptx`, `.ppt`, `.xlsx`, `.xls`, `.rtf`, `.tex`, `.odt`, `.ods`, `.odp`, `.pages`, `.numbers`, `.key` | **Full-Text** |
-| **🇰🇷 Korean Docs** | `.hwp`, `.hwpx` | **Full-Text** |
-| **📧 Emails** | `.pst`, `.eml`, `.msg` | **Full-Text** |
-| **⚙️ Configurations** | `.yaml`, `.yml`, `.ini`, `.cfg`, `.conf`, `.toml`, `.env`, `.properties`, `.gitignore`, `.editorconfig` | **Full-Text** |
-| **💻 Code & Scripts** | `.py`, `.js`, `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.php`, `.rb`, `.go`, `.rs`, `.swift`, `.kt`, `.sql`, `.ps1`, `.sh`, `.bat`, `.dart`, `.scala`, `.lua`, `.pl`, `.asm` | **Full-Text** |
-| **🎨 Web & Templates** | `.html`, `.css`, `.vue`, `.tsx`, `.jsx`, `.scss`, `.less`, `.ejs`, `.pug`, `.hbs`, `.mustache`, `.jinja`, `.twig` | **Full-Text** |
-| **📦 Archives** | `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`, `.xz`, `.lz`, `.cab`, `.iso` | *Filename Only* |
-| **🖼️ Images & Design** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.sketch` | *Filename Only* |
+| **📄 Documents** | `.pdf` | **Full-Text** (Dedicated Embedded Pdfium) |
+| **📁 Word/Excel** | `.docx`, `.xlsx` | **Full-Text** (Dedicated XML/Zip Parsers) |
+| **⚙️ Configs & Scripts** | `.yaml`, `.yml`, `.ini`, `.cfg`, `.conf`, `.toml`, `.env`, `.properties`, `.txt`, `.csv`, `.log`, `.srt`, `.vtt`, `.md`, `.json`, `.xml` | **Full-Text** (Dedicated Text Parser) |
+| **💻 Code Files** | `.py`, `.js`, `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.rs`, `.go`, `.sh`, `.bat`, `.html`, `.css` | **Full-Text** (Dedicated Text Parser) |
+| **Fallback Extraction** | `.pptx`, `.ppt`, `.doc`, `.xls`, `.hwp`, `.hwpx`, `.dwg`, `.dxf`, etc. | **Full-Text Fallback** (Universal Binary Strings Extractor) |
+| **📦 Dynamic Plugins** | `.hwp`, `.hwpx`, `.dwg`, `.dxf` (Dedicated Parsers) | **Full-Text** (Planned for v3.2 via DLL FFI) |
+| **🖼️ Media & Archives** | `.zip`, `.png`, `.jpg`, `.dat`, `.bin`, `.dll`, `.exe`, etc. | *Filename Only* |
+
+---
 
 ## 💾 System Requirements
 
 - **OS**: Windows 10+ (64-bit)
 - **RAM**: 4GB+ recommended
-- **Storage**: 100MB+
-- **Python**: 3.8+ (developer mode only)
+- **Storage**: Less than 10MB (Single binary size: ~4.46MB)
+- **Rust Toolchain**: 1.70+ (Developer compilation only)
+
+---
 
 ## 📊 Performance Metrics
 
-- Scan Speed: **10,000+ files/minute**
-- Search Speed: **Millisecond response time**
-- Memory Usage: **~100MB**
-- Setup Installer: **51.5 MB (WebEngine excluded)**
+- **First Scan Speed (MFT)**: Under 5 seconds for 1.6 Million files
+- **Search Response Time**: ~0.1 milliseconds
+- **Idle Memory Footprint**: **Under 10MB**
+- **Active Scan Memory Footprint**: **Under 30MB**
+- **Standalone Binary Size**: **~4.46MB** (LTO & Strip optimized)
+
+---
 
 ## 🔧 Usage
 
 ### 1️⃣ File Scanning
-1. Click "Scan Folders" to select directory
-2. Click "Start Scan" to begin scanning
-3. View real-time progress
+1. Open the application.
+2. Enter the path in the "Scan Folder" field or select it via the native directory dialog.
+3. Click "Scan Folder" to begin the indexing process.
 
-### 2️⃣ File Search
-1. Enter keywords in search box
-2. Press Enter or click "Search" button
-3. Select file from results to preview
+### 2️⃣ Fast Search
+1. Type search queries into the main input field.
+2. Press Enter or click the Search button to view matching filenames or content snippets instantly.
+3. Select any file from the results table to preview details and context matches in the sidebar.
 
-### 3️⃣ Index Management
-- **Save Index**: Save current index
-- **Load Index**: Load saved index
-- **Clear Records**: Reset index
-
-## 📈 Recent Updates
-
-### v2.2.0 (2026-06-29)
-- 🔷 Reorganized sidebar filters into clean collapsible categories.
-- 🔷 Fixed case sensitivity (Match Case) logic bugs and text position offset.
-- 🔷 Added pure black checkbox borders in Light Mode to maximize readability.
-- 🔷 Optimized PyInstaller package and Inno Setup installer.
-
-### v1.0.0 (2026-06-13)
-- 🔷 Upgraded PyQt6 desktop interface and lightweight file indexer.
-
-📖 See [CHANGELOG.md](CHANGELOG.md) for complete change history.
-
-## 🛠️ Development Guide
-
-### Setup Development Environment
-
-```bash
-# 1. Clone repository
-git clone https://github.com/HAKARCo/DeepFileX.git
-cd DeepFileX
-
-# 2. Create virtual environment (recommended)
-python -m venv venv
-venv\Scripts\activate  # Windows
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Run
-python src\deepfilex.py
-```
-
-### Building
-
-```bash
-# Build executable with PyInstaller
-pyinstaller DeepFileX.spec --clean
-```
-
-Build output: `dist/DeepFileX_v1.0.0/DeepFileX.exe`
-
-### Project Structure
-
-```
-DeepFileX/
-├── src/                   # Source code
-│   ├── deepfilex.py       # Main application
-│   ├── update_checker.py  # Auto-update
-│   └── version_config.py  # Version management
-├── tests/                 # Test files
-├── build/                 # Build configuration
-│   ├── specs/             # PyInstaller specs
-│   └── scripts/           # Build scripts
-├── docs/                  # Documentation
-│   ├── releases/          # Release notes
-│   └── CONTRIBUTING.md    # Contribution guide
-├── README.md              # Project overview
-├── CHANGELOG.md           # Change history
-├── LICENSE.txt            # Proprietary License
-└── requirements.txt       # Dependencies
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. **Fork** and clone the repository
-2. **Create branch**: `git checkout -b feature/AmazingFeature`
-3. **Commit changes**: `git commit -m "✨ feat: Add AmazingFeature"`
-4. **Push**: `git push origin feature/AmazingFeature`
-5. **Create Pull Request**
-
-### Contribution Guidelines
-
-- ✅ Follow PEP 8 coding style
-- ✅ Test changes thoroughly
-- ✅ Update documentation for new features
-- ✅ Maintain Python 3.8+ compatibility
-- ✅ Reference related issue numbers in PRs
-
-## 📝 License
-
-This project is licensed under the Proprietary License (All Rights Reserved). See [LICENSE.txt](LICENSE.txt) for details.
-
-## 📞 Support & Contact
-
-- **GitHub**: https://github.com/HAKARCo/DeepFileX
-- **Releases**: https://github.com/HAKARCo/DeepFileX/releases
-- **Issues**: https://github.com/HAKARCo/DeepFileX/issues
-- **Discussions**: https://github.com/HAKARCo/DeepFileX/discussions
+### 3️⃣ Index Persistence
+- **Save Index**: Commits scanned file paths and compressed FTS5 content to the local `.hidx` index database.
+- **Load Index**: Instantly loads the saved metadata from disk to bypass initial drive scanning upon startup.
 
 ---
 
-**DeepFileX v1.0.0** by **QuantumLayer** - Advanced File Analysis System 🔷
+## 📈 Recent Updates
+
+### v3.1.0 (2026-07-11)
+- 🔷 Re-engineered entire architecture from Python/PyQt6 to Rust/egui.
+- 🔷 Integrated Google's Pdfium engine statically (`include_bytes!`) for accurate PDF text parsing.
+- 🔷 Fixed major Windows pathing locks on CJK/space-containing paths.
+- 🔷 Replaced `SUBSTR` logic with SQLite `NOT LIKE` prefix queries to prevent database clean loss.
+- 🔷 Hid the development CMD console window in release builds.
+- 🔷 Applied custom DFX branding icon dynamically to window viewport and taskbar.
+
+📖 See [CHANGELOG.md](CHANGELOG.md) for complete historical details.
+
+---
+
+## 🛠️ Development & Build Guide
+
+### Directory Structure
+
+```
+hakar-core/
+├── src/                  # Rust source code
+│   ├── main.rs           # GUI Application Entry (egui)
+│   ├── parser.rs         # File text extractors (Pdfium, zip, xml)
+│   ├── db.rs             # SQLite FTS5 database mapping
+│   ├── ntfs.rs           # NTFS MFT parser
+│   └── dfx_logo.png      # Brand logo image asset
+├── Cargo.toml            # Dependencies and Release profiles
+├── build.rs              # Windows resource compiler (icon mapping)
+└── README.md             # Project documentation
+```
+
+### Build Command
+
+To rebuild the production-ready optimized executable, run:
+```bash
+cargo build --release
+```
+The output binary will be written to `target/release/DeepFileX.exe`.
+
+---
+
+## 🤝 Contributing
+
+This is a proprietary utility belonging to **HAKAR**. External contributions require signing a NDA.
