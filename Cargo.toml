@@ -1,0 +1,50 @@
+[package]
+name = "deepfilex"
+version = "3.1.0"
+edition = "2024"
+
+[[bin]]
+name = "DeepFileX"
+path = "src/main.rs"
+
+[dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_SystemServices",
+    "Win32_Security",
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+    "Win32_System_LibraryLoader"
+] }
+winapi = { version = "0.3", features = ["winuser", "windef", "winbase", "libloaderapi"] } # eframe 윈도우 의존성 보강
+aes-gcm = "0.10"
+zstd = "0.13"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+eframe = "0.22"       # egui framework
+egui_extras = "0.22"  # 테이블 레이아웃 빌더
+rusqlite = { version = "0.29", features = ["bundled", "backup"] } # SQLite 정적 번들 및 온라인 백업 API
+walkdir = "2"         # 폴백 디렉토리 순회
+chrono = "0.4"        # 윈도우 스타일 시간 포맷팅용
+pdfium-render = "0.8.20" # Pdfium 기반 고품질 PDF 본문 추출
+zip = "0.6"           # docx/xlsx doc zip 추출
+quick-xml = "0.31"    # docx/xlsx xml 파싱용
+rfd = "0.12"          # 폴더/파일 선택 네이티브 다이얼로그용
+encoding_rs = "0.8"
+flate2 = "1.0"
+image = "0.24"        # 런타임 윈도우 로고 아이콘 디코더용
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# panic = "abort"
+
+strip = true
+
+[build-dependencies]
+winres = "0.1"
+
