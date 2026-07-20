@@ -4,6 +4,7 @@ pub mod ntfs;
 pub mod crypto;
 pub mod db;
 pub mod parser;
+pub mod update;
 
 pub fn scan_volume(volume: &str) -> Result<Vec<(u64, String, bool)>, String> {
     // 1. Try with GENERIC_READ first (necessary for FSCTL_QUERY_USN_JOURNAL validation)
@@ -110,7 +111,9 @@ pub fn walk_directory(root: &str) -> Vec<(String, u64, u64, bool)> {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name == "Windows" || name == "Program Files" || name == "Program Files (x86)"
                         || name == "$Recycle.Bin" || name == "System Volume Information"
-                        || name.starts_with('.')
+                        || name == "AppData" || name == "node_modules" || name == ".git"
+                        || name == "target" || name == ".cargo" || name == ".rustup"
+                        || name == "Local" || name == "Roaming" || name.starts_with('.')
                     {
                         return false;
                     }

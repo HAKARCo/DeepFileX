@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Instant;
 use std::io::Read;
-use deepfilex::db::Database;
+use deepfilex::db::{Database, SearchFilter};
 
 mod win_shell;
 
@@ -41,6 +41,8 @@ struct DeepFileXApp {
     // Index Manager Load History
     loaded_indices: Vec<String>,
     was_indexing: bool,
+    is_saving_index: Arc<Mutex<bool>>,
+    was_saving_index: bool,
 
     // Debounce fields for Live Search
     last_input_time: Instant,
@@ -55,6 +57,42 @@ struct DeepFileXApp {
     selected_indices: std::collections::HashSet<String>,
     show_delete_confirm: Option<Vec<String>>,
     is_content_indexing_cancelled: Arc<AtomicBool>,
+
+    // Advanced Filters fields
+    filter_min_size: String,
+    filter_max_size: String,
+    filter_date_range: usize,
+    filter_extensions: String,
+
+    // Sorting fields
+    sort_column: usize, // 0 = Name, 1 = Type, 2 = Size, 3 = Modified Date
+
+    // Auto-update fields
+    update_config: deepfilex::update::UpdateConfig,
+    update_context: Arc<Mutex<deepfilex::update::UpdateContext>>,
+    show_about: bool,
+    show_update_settings: bool,
+    show_plugins_settings: bool,
+}
+
+fn parse_size_limit(s: &str) -> Option<u64> {
+    let s = s.trim().to_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+    let mut num_str = s.as_str();
+    let mut multiplier = 1u64;
+    if s.ends_with("kb") || s.ends_with("k") {
+        multiplier = 1024;
+        num_str = &s[..s.len() - if s.ends_with("kb") { 2 } else { 1 }];
+    } else if s.ends_with("mb") || s.ends_with("m") {
+        multiplier = 1024 * 1024;
+        num_str = &s[..s.len() - if s.ends_with("mb") { 2 } else { 1 }];
+    } else if s.ends_with("gb") || s.ends_with("g") {
+        multiplier = 1024 * 1024 * 1024;
+        num_str = &s[..s.len() - if s.ends_with("gb") { 2 } else { 1 }];
+    }
+    num_str.trim().parse::<f64>().ok().map(|n| (n * multiplier as f64) as u64)
 }
 
 #[allow(dead_code, unused_variables)]
@@ -89,6 +127,8 @@ impl DeepFileXApp {
             sort_ascending: true,
             loaded_indices: Vec::new(),
             was_indexing: false,
+            is_saving_index: Arc::new(Mutex::new(false)),
+            was_saving_index: false,
             last_input_time: Instant::now(),
             pending_live_search: false,
             is_content_indexing: Arc::new(Mutex::new(false)),
@@ -99,9 +139,23 @@ impl DeepFileXApp {
             selected_indices: std::collections::HashSet::new(),
             show_delete_confirm: None,
             is_content_indexing_cancelled: Arc::new(AtomicBool::new(false)),
+            filter_min_size: String::new(),
+            filter_max_size: String::new(),
+            filter_date_range: 0,
+            filter_extensions: String::new(),
+            sort_column: 0,
+            update_config: deepfilex::update::UpdateConfig::load(),
+            update_context: Arc::new(Mutex::new(deepfilex::update::UpdateContext::default())),
+            show_about: false,
+            show_update_settings: false,
+            show_plugins_settings: false,
         };
 
         app.refresh_loaded_indices();
+        
+        if app.update_config.enabled && app.update_config.auto_check {
+            deepfilex::update::trigger_update_check(app.update_context.clone(), app.update_config.clone());
+        }
         
         app.start_indexing(&_cc.egui_ctx);
         app
@@ -310,6 +364,30 @@ impl DeepFileXApp {
             return;
         }
 
+        // Build SearchFilter
+        let min_mtime = match self.filter_date_range {
+            1 => Some(chrono::Utc::now().timestamp() as u64 - 86400),
+            2 => Some(chrono::Utc::now().timestamp() as u64 - 7 * 86400),
+            3 => Some(chrono::Utc::now().timestamp() as u64 - 30 * 86400),
+            _ => None,
+        };
+
+        let extensions = if self.filter_extensions.trim().is_empty() {
+            None
+        } else {
+            Some(self.filter_extensions.split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<String>>())
+        };
+
+        let filter = SearchFilter {
+            min_size: parse_size_limit(&self.filter_min_size),
+            max_size: parse_size_limit(&self.filter_max_size),
+            min_mtime,
+            extensions,
+        };
+
         // Resolve full paths of selected external database files
         let home_dir = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
         let default_dir = std::path::PathBuf::from(home_dir)
@@ -334,8 +412,32 @@ impl DeepFileXApp {
                     for db_path in &external_dbs {
                         let p = std::path::Path::new(db_path);
                         if let Ok(conn) = rusqlite::Connection::open(p) {
-                            if let Ok(mut stmt) = conn.prepare("SELECT file_id, file_path, is_dir, file_size, mtime FROM FILES LIMIT 200") {
-                                if let Ok(rows) = stmt.query_map([], |row| {
+                            let mut query_str = "SELECT file_id, file_path, is_dir, file_size, mtime FROM FILES WHERE 1=1".to_string();
+                            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+                            if let Some(min) = filter.min_size {
+                                query_str.push_str(" AND file_size >= ?");
+                                params.push(Box::new(min));
+                            }
+                            if let Some(max) = filter.max_size {
+                                query_str.push_str(" AND file_size <= ?");
+                                params.push(Box::new(max));
+                            }
+                            if let Some(min_t) = filter.min_mtime {
+                                query_str.push_str(" AND mtime >= ?");
+                                params.push(Box::new(min_t));
+                            }
+                            if let Some(ref exts) = filter.extensions {
+                                if !exts.is_empty() {
+                                    for ext in exts {
+                                        query_str.push_str(" AND file_path LIKE ?");
+                                        params.push(Box::new(format!("%.{}", ext.to_lowercase())));
+                                    }
+                                }
+                            }
+                            query_str.push_str(" LIMIT 200");
+                            if let Ok(mut stmt) = conn.prepare(&query_str) {
+                                let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+                                if let Ok(rows) = stmt.query_map(&params_ref[..], |row| {
                                     Ok((
                                         row.get(0)?,
                                         row.get(1)?,
@@ -355,8 +457,26 @@ impl DeepFileXApp {
                     }
                     final_results.truncate(200);
                 } else {
-                    for item in mem.iter().take(200) {
+                    for item in mem.iter() {
+                        if let Some(min) = filter.min_size {
+                            if item.4 < min { continue; }
+                        }
+                        if let Some(max) = filter.max_size {
+                            if item.4 > max { continue; }
+                        }
+                        if let Some(min_t) = filter.min_mtime {
+                            if item.5 < min_t { continue; }
+                        }
+                        if let Some(ref exts) = filter.extensions {
+                            if !exts.is_empty() {
+                                let ext_matched = exts.iter().any(|ext| item.1.to_lowercase().ends_with(&format!(".{}", ext)));
+                                if !ext_matched { continue; }
+                            }
+                        }
                         final_results.push((item.0, item.1.clone(), item.3, item.4, item.5));
+                        if final_results.len() >= 200 {
+                            break;
+                        }
                     }
                 }
             }
@@ -373,13 +493,32 @@ impl DeepFileXApp {
                 for db_path in &external_dbs {
                     let p = std::path::Path::new(db_path);
                     if let Ok(conn) = rusqlite::Connection::open(p) {
-                        if let Ok(mut stmt) = conn.prepare(
-                            "SELECT file_id, file_path, is_dir, file_size, mtime 
-                             FROM FILES 
-                             WHERE REPLACE(LOWER(file_path), '/', '\\') LIKE ? 
-                             LIMIT 200"
-                        ) {
-                            if let Ok(rows) = stmt.query_map(rusqlite::params![like_query], |row| {
+                        let mut query_str = "SELECT file_id, file_path, is_dir, file_size, mtime FROM FILES WHERE REPLACE(LOWER(file_path), '/', '\\') LIKE ?".to_string();
+                        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(like_query.clone())];
+                        if let Some(min) = filter.min_size {
+                            query_str.push_str(" AND file_size >= ?");
+                            params.push(Box::new(min));
+                        }
+                        if let Some(max) = filter.max_size {
+                            query_str.push_str(" AND file_size <= ?");
+                            params.push(Box::new(max));
+                        }
+                        if let Some(min_t) = filter.min_mtime {
+                            query_str.push_str(" AND mtime >= ?");
+                            params.push(Box::new(min_t));
+                        }
+                        if let Some(ref exts) = filter.extensions {
+                            if !exts.is_empty() {
+                                for ext in exts {
+                                    query_str.push_str(" AND file_path LIKE ?");
+                                    params.push(Box::new(format!("%.{}", ext.to_lowercase())));
+                                }
+                            }
+                        }
+                        query_str.push_str(" LIMIT 200");
+                        if let Ok(mut stmt) = conn.prepare(&query_str) {
+                            let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+                            if let Ok(rows) = stmt.query_map(&params_ref[..], |row| {
                                 Ok((
                                     row.get(0)?,
                                     row.get(1)?,
@@ -402,6 +541,21 @@ impl DeepFileXApp {
                 let query_lower = query.to_lowercase();
                 for item in mem.iter() {
                     if item.2.contains(&query_lower) {
+                        if let Some(min) = filter.min_size {
+                            if item.4 < min { continue; }
+                        }
+                        if let Some(max) = filter.max_size {
+                            if item.4 > max { continue; }
+                        }
+                        if let Some(min_t) = filter.min_mtime {
+                            if item.5 < min_t { continue; }
+                        }
+                        if let Some(ref exts) = filter.extensions {
+                            if !exts.is_empty() {
+                                let ext_matched = exts.iter().any(|ext| item.1.to_lowercase().ends_with(&format!(".{}", ext)));
+                                if !ext_matched { continue; }
+                            }
+                        }
                         final_results.push((item.0, item.1.clone(), item.3, item.4, item.5));
                         if final_results.len() >= 200 {
                             break;
@@ -420,19 +574,13 @@ impl DeepFileXApp {
             let active_query = self.active_live_query.clone();
             let query_str = query.clone();
             let ctx_clone = ctx.clone();
+            let filter_clone = filter.clone();
 
             *active_query.lock().unwrap_or_else(|e| e.into_inner()) = query_str.clone();
 
             thread::spawn(move || {
-                // Sleep brief debounce (150ms) to prevent excessive DB queries during typing
-                thread::sleep(std::time::Duration::from_millis(150));
-                
-                if *active_query.lock().unwrap_or_else(|e| e.into_inner()) != query_str {
-                    return; // Abort if query changed
-                }
-
                 if let Ok(db) = db_arc.lock() {
-                    if let Ok(content_res) = db.search_files_by_content(&query_str, 200, &external_dbs) {
+                    if let Ok(content_res) = db.search_files_by_content(&query_str, &filter_clone, 200, &external_dbs) {
                         if *active_query.lock().unwrap_or_else(|e| e.into_inner()) == query_str {
                             let mut res_lock = results_arc.lock().unwrap_or_else(|e| e.into_inner());
                             *res_lock = content_res;
@@ -522,11 +670,24 @@ impl DeepFileXApp {
 
                     let mut count = 0;
                     let mut was_cancelled = false;
+                    let mut tx_active = false;
+                    
                     for (file_path, file_size, mtime, is_dir) in target_files {
                         if is_indexing_cancelled.load(Ordering::SeqCst) {
                             was_cancelled = true;
                             break;
                         }
+                        
+                        if count % 100 == 0 {
+                            if tx_active {
+                                let _ = bg_db.commit_transaction();
+                                tx_active = false;
+                            }
+                            if bg_db.begin_transaction().is_ok() {
+                                tx_active = true;
+                            }
+                        }
+                        
                         // 2. Insert into FILES table dynamically to get file_id
                         if let Ok(file_id) = bg_db.insert_file(&file_path, file_size, mtime, is_dir) {
                             if let Ok(exists) = bg_db.has_content_index(file_id) {
@@ -553,6 +714,11 @@ impl DeepFileXApp {
                             ctx_clone.request_repaint();
                         }
                     }
+                    
+                    if tx_active {
+                        let _ = bg_db.commit_transaction();
+                    }
+                    
                     if !was_cancelled {
                         let _ = bg_db.insert_scan_history(&target_folder);
                     }
@@ -656,11 +822,261 @@ fn force_enable_ime() {
 
 impl eframe::App for DeepFileXApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.pending_live_search && self.last_input_time.elapsed().as_millis() >= 250 {
+            self.pending_live_search = false;
+            self.search(ctx);
+        }
+        if self.pending_live_search {
+            ctx.request_repaint();
+        }
+
+        let update_repaint_needed = {
+            let lock = self.update_context.lock().unwrap();
+            lock.state == deepfilex::update::UpdateState::Checking ||
+            lock.state == deepfilex::update::UpdateState::Downloading ||
+            lock.state == deepfilex::update::UpdateState::Verifying ||
+            lock.state == deepfilex::update::UpdateState::Installing
+        };
+        if update_repaint_needed {
+            ctx.request_repaint();
+        }
+
         #[cfg(target_os = "windows")]
         {
             force_enable_ime();
         }
 
+        // Top Menu Bar
+        egui::TopBottomPanel::top("menu_bar_panel").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("📄 File", |ui| {
+                    if ui.button("🔄 Refresh Index").clicked() {
+                        self.start_indexing(ctx);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("❌ Exit").clicked() {
+                        _frame.close();
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("🔍 Search Mode", |ui| {
+                    let mut changed = false;
+                    if ui.radio_value(&mut self.search_file_name, true, "Filename Search").clicked() {
+                        self.search_content = false;
+                        changed = true;
+                    }
+                    if ui.radio_value(&mut self.search_content, true, "Content Search").clicked() {
+                        self.search_file_name = false;
+                        changed = true;
+                    }
+                    if changed {
+                        self.last_input_time = std::time::Instant::now();
+                        self.pending_live_search = true;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("🌐 Updates", |ui| {
+                    if ui.button("⚙️ Settings...").clicked() {
+                        self.show_update_settings = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("🔄 Check for Updates").clicked() {
+                        deepfilex::update::trigger_update_check(
+                            self.update_context.clone(),
+                            self.update_config.clone(),
+                        );
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("🔌 Plugins", |ui| {
+                    if ui.button("⚙️ Manage Plugins...").clicked() {
+                        self.show_plugins_settings = true;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("❓ Help", |ui| {
+                    if ui.button("ℹ️ About").clicked() {
+                        self.show_about = true;
+                        ui.close_menu();
+                    }
+                });
+            });
+        });
+
+        // Plugins Settings Window
+        if self.show_plugins_settings {
+            let mut show = self.show_plugins_settings;
+            let mut close_clicked = false;
+            egui::Window::new("🔌 Plugins Manager")
+                .open(&mut show)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Enable or disable dynamic text extraction plugins:").weak());
+                    ui.add_space(5.0);
+
+                    // HWP Plugin
+                    let mut hwp_active = deepfilex::parser::ENABLE_HWP_PLUGIN.load(std::sync::atomic::Ordering::Relaxed);
+                    if ui.checkbox(&mut hwp_active, "Enable HWP Parser").changed() {
+                        deepfilex::parser::ENABLE_HWP_PLUGIN.store(hwp_active, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let hwp_status = if std::path::Path::new("plugins/hwp_parser.dll").exists() { "Detected" } else { "Not Found" };
+                    ui.label(egui::RichText::new(format!("  - Status: {} (plugins/hwp_parser.dll)", hwp_status)).weak().small());
+
+                    ui.add_space(10.0);
+
+                    // DWG Plugin
+                    let mut dwg_active = deepfilex::parser::ENABLE_DWG_PLUGIN.load(std::sync::atomic::Ordering::Relaxed);
+                    if ui.checkbox(&mut dwg_active, "Enable DWG Parser").changed() {
+                        deepfilex::parser::ENABLE_DWG_PLUGIN.store(dwg_active, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let dwg_status = if std::path::Path::new("plugins/dwg_parser.dll").exists() { "Detected" } else { "Not Found" };
+                    ui.label(egui::RichText::new(format!("  - Status: {} (plugins/dwg_parser.dll)", dwg_status)).weak().small());
+
+                    ui.separator();
+                    ui.vertical_centered(|ui| {
+                        if ui.button("Close").clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                });
+            self.show_plugins_settings = show && !close_clicked;
+        }
+
+        // About Dialog Window
+        if self.show_about {
+            let mut show = self.show_about;
+            let mut close_clicked = false;
+            egui::Window::new("ℹ️ About DeepFileX")
+                .open(&mut show)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("DeepFileX v3.2.0");
+                        ui.label("Ultra-fast NTFS file and content search engine based on Rust & egui");
+                        ui.add_space(10.0);
+                        ui.label("Developer: HAKAR");
+                        ui.label("© 2026 HAKAR. All rights reserved.");
+                        ui.add_space(15.0);
+                        if ui.button("Close").clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                });
+            self.show_about = show && !close_clicked;
+        }
+
+        // Auto Update Settings Window
+        if self.show_update_settings {
+            let mut show = self.show_update_settings;
+            egui::Window::new("🔄 Auto Update Settings")
+                .open(&mut show)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let mut config = self.update_config.clone();
+                    let mut config_changed = false;
+
+                    if ui.checkbox(&mut config.enabled, "Enable Auto Update").changed() {
+                        config_changed = true;
+                    }
+
+                    ui.add_enabled_ui(config.enabled, |ui| {
+                        if ui.checkbox(&mut config.auto_check, "Auto check periodically").changed() {
+                            config_changed = true;
+                        }
+                        ui.add_enabled_ui(config.auto_check, |ui| {
+                            if ui.checkbox(&mut config.auto_download, "Auto download updates").changed() {
+                                config_changed = true;
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Channel:");
+                            let mut selected_channel = config.channel;
+                            let channel_res = egui::ComboBox::from_label("")
+                                .selected_text(match selected_channel {
+                                    deepfilex::update::Channel::Stable => "Stable (Production)",
+                                    deepfilex::update::Channel::Beta => "Beta (Release Candidate)",
+                                    deepfilex::update::Channel::Nightly => "Nightly (Development)",
+                                })
+                                .show_ui(ui, |ui| {
+                                    let mut ch = false;
+                                    ch |= ui.selectable_value(&mut selected_channel, deepfilex::update::Channel::Stable, "Stable").changed();
+                                    ch |= ui.selectable_value(&mut selected_channel, deepfilex::update::Channel::Beta, "Beta").changed();
+                                    ch |= ui.selectable_value(&mut selected_channel, deepfilex::update::Channel::Nightly, "Nightly").changed();
+                                    ch
+                                });
+                            if channel_res.inner.unwrap_or(false) {
+                                config.channel = selected_channel;
+                                config_changed = true;
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Check Interval (hours):");
+                            let mut val = config.check_interval_hours;
+                            let slider = ui.add(egui::Slider::new(&mut val, 1..=168));
+                            if slider.changed() {
+                                config.check_interval_hours = val;
+                                config_changed = true;
+                            }
+                        });
+                    });
+
+                    if config_changed {
+                        config.save();
+                        self.update_config = config;
+                    }
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        let checking = {
+                            let lock = self.update_context.lock().unwrap();
+                            lock.state == deepfilex::update::UpdateState::Checking ||
+                            lock.state == deepfilex::update::UpdateState::Downloading ||
+                            lock.state == deepfilex::update::UpdateState::Verifying ||
+                            lock.state == deepfilex::update::UpdateState::Installing
+                        };
+                        
+                        if ui.add_enabled(!checking, egui::Button::new("Check Now")).clicked() {
+                            deepfilex::update::trigger_update_check(
+                                self.update_context.clone(),
+                                self.update_config.clone(),
+                            );
+                        }
+                        
+                        let (state_text, progress, err_msg) = {
+                            let lock = self.update_context.lock().unwrap();
+                            let progress = if lock.total_bytes > 0 {
+                                Some(lock.downloaded_bytes as f32 / lock.total_bytes as f32)
+                            } else {
+                                None
+                            };
+                            (lock.state.as_str().to_string(), progress, lock.error_message.clone())
+                        };
+                        
+                        ui.label(format!("Status: {}", state_text));
+                        if let Some(pct) = progress {
+                            ui.add(egui::ProgressBar::new(pct).text(format!("{:.1}%", pct * 100.0)));
+                        }
+                        if let Some(err) = err_msg {
+                            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("Error: {}", err));
+                        }
+                    });
+                });
+            self.show_update_settings = show;
+        }
 
         // Detect background indexing thread completion to refresh loaded paths
         let currently_indexing = *self.is_indexing.lock().unwrap_or_else(|e| e.into_inner());
@@ -668,6 +1084,13 @@ impl eframe::App for DeepFileXApp {
             self.refresh_loaded_indices();
         }
         self.was_indexing = currently_indexing;
+
+        // Detect background database saving completion
+        let currently_saving = *self.is_saving_index.lock().unwrap_or_else(|e| e.into_inner());
+        if self.was_saving_index && !currently_saving {
+            self.refresh_loaded_indices();
+        }
+        self.was_saving_index = currently_saving;
         
         // Left SidePanel for Content Index Selection (Only shown when search_content is true)
         if self.search_content {
@@ -798,6 +1221,77 @@ impl eframe::App for DeepFileXApp {
 
 
 
+        // Right SidePanel for Content Preview
+        if self.search_content && self.selected_file_path.is_some() {
+            let path = self.selected_file_path.as_ref().unwrap();
+            egui::SidePanel::right("preview_sidebar")
+                .resizable(true)
+                .default_width(320.0)
+                .width_range(200.0..=600.0)
+                .show(ctx, |ui| {
+                    ui.add_space(10.0);
+                    ui.heading("📄 File Preview");
+                    ui.separator();
+                    
+                    let filename = std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path.as_str());
+                    ui.label(egui::RichText::new(filename).strong());
+                    
+                    if let Some(ref content) = self.selected_file_content {
+                        let query = self.search_query.trim();
+                        if !query.is_empty() {
+                            let content_lower = content.to_lowercase();
+                            let query_lower = query.to_lowercase();
+                            let occurrences = content_lower.matches(&query_lower).count();
+                            ui.colored_label(egui::Color32::from_rgb(255, 140, 0), format!("🔍 Found {} time(s)", occurrences));
+                        }
+                    }
+                    ui.add_space(5.0);
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if let Some(ref content) = self.selected_file_content {
+                            let query = self.search_query.trim();
+                            if !query.is_empty() {
+                                let content_lower = content.to_lowercase();
+                                let query_lower = query.to_lowercase();
+                                
+                                if let Some(idx) = content_lower.find(&query_lower) {
+                                    let start = idx.saturating_sub(100);
+                                    let end = std::cmp::min(content.len(), idx + query.len() + 100);
+                                    
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        
+                                        if start > 0 {
+                                            ui.label("... ");
+                                        }
+                                        ui.label(&content[start..idx]);
+                                        
+                                        ui.label(egui::RichText::new(&content[idx..idx + query.len()])
+                                            .strong()
+                                            .background_color(egui::Color32::from_rgb(255, 140, 0))
+                                            .color(egui::Color32::WHITE));
+                                        
+                                        ui.label(&content[idx + query.len()..end]);
+                                        if end < content.len() {
+                                            ui.label(" ...");
+                                        }
+                                    });
+                                } else {
+                                    ui.label(content);
+                                }
+                            } else {
+                                ui.label(content);
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("(No preview available or file has no content index)").italics());
+                        }
+                    });
+                });
+        }
+
         // Central Panel: Results
         egui::CentralPanel::default().show(ctx, |ui| {
             let admin_status = if is_user_admin() { " [Admin]" } else { " [Non-Admin]" };
@@ -849,26 +1343,34 @@ impl eframe::App for DeepFileXApp {
                                 // Auto-create directory structure if not exists
                                 let _ = std::fs::create_dir_all(&default_dir);
 
-                                let mut save_success = false;
                                 if let Some(dest_path) = rfd::FileDialog::new()
                                     .set_directory(&default_dir)
                                     .set_file_name(&default_filename)
                                     .add_filter("SQLite Database", &["db"])
                                     .save_file() 
                                 {
-                                    if let Ok(db) = self.db.lock() {
-                                        match db.backup_to(&dest_path) {
-                                            Ok(_) => {
-                                                // Clean up non-target files and VACUUM the backup database to make it a dedicated light index
-                                                if let Ok(conn) = rusqlite::Connection::open(&dest_path) {
-                                                    let scan_history_path = folder_path_clone.replace("/", "\\").to_lowercase();
+                                    let db_arc = self.db.clone();
+                                    let ctx_clone = ctx.clone();
+                                    let folder_path_clone_t = folder_path_clone.clone();
+                                    let dest_path_t = dest_path.clone();
+                                    let is_saving_t = self.is_saving_index.clone();
+
+                                    *is_saving_t.lock().unwrap() = true;
+                                    self.status_message = "Saving index database in background...".to_string();
+
+                                    std::thread::spawn(move || {
+                                        let mut success = false;
+                                        if let Ok(db) = db_arc.lock() {
+                                            if db.backup_to(&dest_path_t).is_ok() {
+                                                if let Ok(conn) = rusqlite::Connection::open(&dest_path_t) {
+                                                    let scan_history_path = folder_path_clone_t.replace("/", "\\").to_lowercase();
                                                     let mut lower_folder = scan_history_path.clone();
                                                     if !lower_folder.ends_with('\\') {
                                                         lower_folder.push('\\');
                                                     }
                                                     let like_pattern = format!("{}%", lower_folder);
 
-                                                    // A. Delete records not matching target folder path prefix (case-insensitive, slash/backslash-insensitive)
+                                                    // A. Delete records not matching target folder path prefix
                                                     let _ = conn.execute(
                                                         "DELETE FROM FILES WHERE REPLACE(LOWER(file_path), '/', '\\') NOT LIKE ?",
                                                         rusqlite::params![like_pattern]
@@ -878,7 +1380,7 @@ impl eframe::App for DeepFileXApp {
                                                         rusqlite::params![scan_history_path]
                                                     );
 
-                                                    // B. Explicitly clean up orphan records from FTS virtual tables
+                                                    // B. Clean up FTS & FILE_CONTENTS orphans
                                                     let _ = conn.execute(
                                                         "DELETE FROM FILES_FTS WHERE file_id NOT IN (SELECT file_id FROM FILES)",
                                                         []
@@ -887,28 +1389,22 @@ impl eframe::App for DeepFileXApp {
                                                         "DELETE FROM FILES_CONTENT_FTS WHERE file_id NOT IN (SELECT file_id FROM FILES)",
                                                         []
                                                     );
-
-                                                    // C. Clean up FILE_CONTENTS orphans to ensure maximum size reduction
                                                     let _ = conn.execute(
                                                         "DELETE FROM FILE_CONTENTS WHERE file_id NOT IN (SELECT file_id FROM FILES)",
                                                         []
                                                     );
 
-                                                    // D. Release WAL locks completely and compact file size to dedicated static single file
+                                                    // C. Compact
                                                     let _ = conn.execute("PRAGMA journal_mode = DELETE", []);
                                                     let _ = conn.execute("VACUUM", []);
+                                                    success = true;
                                                 }
-                                                self.status_message = format!("Index saved successfully to: {}", dest_path.display());
-                                                save_success = true;
-                                            }
-                                            Err(e) => {
-                                                self.status_message = format!("Failed to save index: {}", e);
                                             }
                                         }
-                                    }
-                                    if save_success {
-                                        self.refresh_loaded_indices();
-                                    }
+
+                                        *is_saving_t.lock().unwrap() = false;
+                                        ctx_clone.request_repaint();
+                                    });
                                 }
                                 *self.show_backup_prompt.lock().unwrap_or_else(|e| e.into_inner()) = None;
                             }
@@ -949,9 +1445,58 @@ impl eframe::App for DeepFileXApp {
 
                 if changed {
                     self.last_input_time = std::time::Instant::now();
-                    self.search(ctx);
-                    ctx.request_repaint();
+                    self.pending_live_search = true;
                 }
+            });
+
+            // Advanced Filters Panel
+            ui.collapsing("🔍 Advanced Filters", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Min Size:");
+                    let min_sz_res = ui.add(egui::TextEdit::singleline(&mut self.filter_min_size).hint_text("e.g. 1mb").desired_width(80.0));
+                    if min_sz_res.changed() {
+                        self.pending_live_search = true;
+                        self.last_input_time = std::time::Instant::now();
+                    }
+
+                    ui.label("Max Size:");
+                    let max_sz_res = ui.add(egui::TextEdit::singleline(&mut self.filter_max_size).hint_text("e.g. 10mb").desired_width(80.0));
+                    if max_sz_res.changed() {
+                        self.pending_live_search = true;
+                        self.last_input_time = std::time::Instant::now();
+                    }
+
+                    ui.label("Exts:");
+                    let ext_res = ui.add(egui::TextEdit::singleline(&mut self.filter_extensions).hint_text("e.g. pdf, docx").desired_width(120.0));
+                    if ext_res.changed() {
+                        self.pending_live_search = true;
+                        self.last_input_time = std::time::Instant::now();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Date Modified:");
+                    let date_res = egui::ComboBox::from_label("")
+                        .selected_text(match self.filter_date_range {
+                            1 => "Last 24 hours",
+                            2 => "Last 7 days",
+                            3 => "Last 30 days",
+                            _ => "All time",
+                        })
+                        .show_ui(ui, |ui| {
+                            let mut changed = false;
+                            changed |= ui.selectable_value(&mut self.filter_date_range, 0, "All time").changed();
+                            changed |= ui.selectable_value(&mut self.filter_date_range, 1, "Last 24 hours").changed();
+                            changed |= ui.selectable_value(&mut self.filter_date_range, 2, "Last 7 days").changed();
+                            changed |= ui.selectable_value(&mut self.filter_date_range, 3, "Last 30 days").changed();
+                            changed
+                        });
+                    
+                    if date_res.inner.unwrap_or(false) {
+                        self.pending_live_search = true;
+                        self.last_input_time = std::time::Instant::now();
+                    }
+                });
             });
 
             // Content Indexing Path & Button row under search bar
@@ -992,21 +1537,47 @@ impl eframe::App for DeepFileXApp {
             let mut items = primary_items.clone();
             drop(primary_items);
 
-            // Sort items by Filename (ascending / descending)
-            if self.sort_ascending {
-
-                items.sort_by(|a, b| {
-                    let name_a = std::path::Path::new(&a.1).file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                    let name_b = std::path::Path::new(&b.1).file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                    name_a.cmp(&name_b)
-                });
-            } else {
-                items.sort_by(|a, b| {
-                    let name_a = std::path::Path::new(&a.1).file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                    let name_b = std::path::Path::new(&b.1).file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                    name_b.cmp(&name_a)
-                });
-            }
+            // Sort items dynamically by selected column and direction
+            items.sort_by(|a, b| {
+                match self.sort_column {
+                    0 => {
+                        let name_a = std::path::Path::new(&a.1).file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                        let name_b = std::path::Path::new(&b.1).file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                        if self.sort_ascending {
+                            name_a.cmp(&name_b)
+                        } else {
+                            name_b.cmp(&name_a)
+                        }
+                    }
+                    1 => {
+                        let get_type = |x: &(i64, String, bool, u64, u64)| {
+                            if x.2 { "Folder".to_string() } else {
+                                std::path::Path::new(&x.1).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase()
+                            }
+                        };
+                        if self.sort_ascending {
+                            get_type(a).cmp(&get_type(b))
+                        } else {
+                            get_type(b).cmp(&get_type(a))
+                        }
+                    }
+                    2 => {
+                        if self.sort_ascending {
+                            a.3.cmp(&b.3)
+                        } else {
+                            b.3.cmp(&a.3)
+                        }
+                    }
+                    3 => {
+                        if self.sort_ascending {
+                            a.4.cmp(&b.4)
+                        } else {
+                            b.4.cmp(&a.4)
+                        }
+                    }
+                    _ => std::cmp::Ordering::Equal
+                }
+            });
 
             let mut selected_to_process = None;
 
@@ -1016,14 +1587,61 @@ impl eframe::App for DeepFileXApp {
                 .striped(true)
                 .resizable(true)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::remainder()) // 이름 컬럼이 전체를 차지
+                .column(Column::remainder().at_least(20.0)) // Name (can be shrunk down to 20px)
+                .column(Column::initial(80.0).at_least(20.0))  // Type
+                .column(Column::initial(80.0).at_least(20.0))  // Size
+                .column(Column::initial(150.0).at_least(20.0)) // Modified Date
                 .header(24.0, |mut header| {
+                    // Column 1: Name Sort Button
                     header.col(|ui| {
-                        let arrow = if self.sort_ascending { " ▲" } else { " ▼" };
+                        let arrow = if self.sort_column == 0 { if self.sort_ascending { " ▲" } else { " ▼" } } else { "" };
                         let header_text = format!("Name{}", arrow);
-                        let res = ui.selectable_label(true, egui::RichText::new(header_text).strong());
-                        if res.clicked() {
-                            self.sort_ascending = !self.sort_ascending;
+                        if ui.selectable_label(self.sort_column == 0, egui::RichText::new(header_text).strong()).clicked() {
+                            if self.sort_column == 0 {
+                                self.sort_ascending = !self.sort_ascending;
+                            } else {
+                                self.sort_column = 0;
+                                self.sort_ascending = true;
+                            }
+                        }
+                    });
+                    // Column 2: Type Sort Button
+                    header.col(|ui| {
+                        let arrow = if self.sort_column == 1 { if self.sort_ascending { " ▲" } else { " ▼" } } else { "" };
+                        let header_text = format!("Type{}", arrow);
+                        if ui.selectable_label(self.sort_column == 1, egui::RichText::new(header_text).strong()).clicked() {
+                            if self.sort_column == 1 {
+                                self.sort_ascending = !self.sort_ascending;
+                            } else {
+                                self.sort_column = 1;
+                                self.sort_ascending = true;
+                            }
+                        }
+                    });
+                    // Column 3: Size Sort Button
+                    header.col(|ui| {
+                        let arrow = if self.sort_column == 2 { if self.sort_ascending { " ▲" } else { " ▼" } } else { "" };
+                        let header_text = format!("Size{}", arrow);
+                        if ui.selectable_label(self.sort_column == 2, egui::RichText::new(header_text).strong()).clicked() {
+                            if self.sort_column == 2 {
+                                self.sort_ascending = !self.sort_ascending;
+                            } else {
+                                self.sort_column = 2;
+                                self.sort_ascending = true;
+                            }
+                        }
+                    });
+                    // Column 4: Modified Date Sort Button
+                    header.col(|ui| {
+                        let arrow = if self.sort_column == 3 { if self.sort_ascending { " ▲" } else { " ▼" } } else { "" };
+                        let header_text = format!("Modified Date{}", arrow);
+                        if ui.selectable_label(self.sort_column == 3, egui::RichText::new(header_text).strong()).clicked() {
+                            if self.sort_column == 3 {
+                                self.sort_ascending = !self.sort_ascending;
+                            } else {
+                                self.sort_column = 3;
+                                self.sort_ascending = true;
+                            }
                         }
                     });
                 })
@@ -1041,6 +1659,7 @@ impl eframe::App for DeepFileXApp {
                             .and_then(|n| n.to_str())
                             .unwrap_or(path.as_str());
 
+                        // Column 1: Name
                         row.col(|ui| {
                             ui.horizontal(|ui| {
                                 let icon = if *is_dir { "📁" } else { "📄" };
@@ -1071,6 +1690,30 @@ impl eframe::App for DeepFileXApp {
                                     }
                                 });
                             });
+                        });
+
+                        // Column 2: Type
+                        row.col(|ui| {
+                            if *is_dir {
+                                ui.label("Folder");
+                            } else {
+                                let ext = std::path::Path::new(path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("")
+                                    .to_uppercase();
+                                ui.label(if ext.is_empty() { "File".to_string() } else { format!("{} File", ext) });
+                            }
+                        });
+
+                        // Column 3: Size
+                        row.col(|ui| {
+                            ui.label(format_size(*size, *is_dir));
+                        });
+
+                        // Column 4: Modified Date
+                        row.col(|ui| {
+                            ui.label(format_date(*mtime));
                         });
                     });
                 });

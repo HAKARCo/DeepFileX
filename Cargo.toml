@@ -16,7 +16,8 @@ windows-sys = { version = "0.52", features = [
     "Win32_Security",
     "Win32_UI_Shell",
     "Win32_System_Registry",
-    "Win32_System_LibraryLoader"
+    "Win32_System_LibraryLoader",
+    "Win32_Security_Cryptography"
 ] }
 winapi = { version = "0.3", features = ["winuser", "windef", "winbase", "libloaderapi"] } # eframe 윈도우 의존성 보강
 aes-gcm = "0.10"
@@ -29,7 +30,7 @@ egui_extras = "0.22"  # 테이블 레이아웃 빌더
 rusqlite = { version = "0.29", features = ["bundled", "backup"] } # SQLite 정적 번들 및 온라인 백업 API
 walkdir = "2"         # 폴백 디렉토리 순회
 chrono = "0.4"        # 윈도우 스타일 시간 포맷팅용
-pdfium-render = "0.8.20" # Pdfium 기반 고품질 PDF 본문 추출
+lopdf = "0.31" # 순수 Rust 기반 가벼운 PDF 본문 추출
 zip = "0.6"           # docx/xlsx doc zip 추출
 quick-xml = "0.31"    # docx/xlsx xml 파싱용
 rfd = "0.12"          # 폴더/파일 선택 네이티브 다이얼로그용
@@ -37,11 +38,19 @@ encoding_rs = "0.8"
 flate2 = "1.0"
 image = "0.24"        # 런타임 윈도우 로고 아이콘 디코더용
 
+# 자동 업데이트 피처 관련 선택적 종속성 (v3.2 추가)
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"], optional = true }
+serde_json = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+auto-update = ["dep:reqwest", "dep:serde_json", "dep:serde"]
+
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
-# panic = "abort"
+panic = "abort"
 
 strip = true
 

@@ -5,6 +5,14 @@ use std::path::Path;
 
 
 
+#[derive(Debug, Default, Clone)]
+pub struct SearchFilter {
+    pub min_size: Option<u64>,
+    pub max_size: Option<u64>,
+    pub min_mtime: Option<u64>,
+    pub extensions: Option<Vec<String>>,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -93,6 +101,18 @@ impl Database {
         )?;
 
         Ok(())
+    }
+
+    pub fn begin_transaction(&self) -> Result<()> {
+        self.conn.execute("BEGIN TRANSACTION", []).map(|_| ())
+    }
+
+    pub fn commit_transaction(&self) -> Result<()> {
+        self.conn.execute("COMMIT", []).map(|_| ())
+    }
+
+    pub fn rollback_transaction(&self) -> Result<()> {
+        self.conn.execute("ROLLBACK", []).map(|_| ())
     }
 
 
@@ -233,24 +253,49 @@ impl Database {
         Ok(rows.next()?.is_some())
     }
 
-    pub fn search_files_by_content(&self, keyword: &str, limit: usize, external_dbs: &[String]) -> Result<Vec<(i64, String, bool, u64, u64)>> {
+    pub fn search_files_by_content(&self, keyword: &str, filter: &SearchFilter, limit: usize, external_dbs: &[String]) -> Result<Vec<(i64, String, bool, u64, u64)>> {
         if keyword.trim().is_empty() {
             return Ok(Vec::new());
         }
 
-        let search_query = format!("\"{}\" *", keyword);
+        let search_query = format!("\"{}\" *", keyword.trim());
         let mut results = Vec::new();
 
         if external_dbs.is_empty() {
-            // A. Default: query main database only
-            let mut stmt = self.conn.prepare(
-                "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
-                 FROM FILES_CONTENT_FTS cfts
-                 JOIN FILES f ON f.file_id = cfts.file_id
-                 WHERE cfts.content MATCH ? 
-                 LIMIT ?"
-            )?;
-            let rows = stmt.query_map(params![search_query, limit], |row| {
+            let mut query = "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
+                             FROM FILES_CONTENT_FTS cfts
+                             JOIN FILES f ON f.file_id = cfts.file_id
+                             WHERE cfts.content MATCH ?".to_string();
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(search_query)];
+
+            if let Some(min) = filter.min_size {
+                query.push_str(" AND f.file_size >= ?");
+                params.push(Box::new(min));
+            }
+            if let Some(max) = filter.max_size {
+                query.push_str(" AND f.file_size <= ?");
+                params.push(Box::new(max));
+            }
+            if let Some(min_t) = filter.min_mtime {
+                query.push_str(" AND f.mtime >= ?");
+                params.push(Box::new(min_t));
+            }
+            if let Some(ref exts) = filter.extensions {
+                if !exts.is_empty() {
+                    for ext in exts {
+                        query.push_str(" AND f.file_path LIKE ?");
+                        params.push(Box::new(format!("%.{}", ext.to_lowercase())));
+                    }
+                }
+            }
+
+            query.push_str(" LIMIT ?");
+            params.push(Box::new(limit));
+
+            let mut stmt = self.conn.prepare(&query)?;
+            let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+            let rows = stmt.query_map(&params_ref[..], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -265,18 +310,42 @@ impl Database {
                 }
             }
         } else {
-            // B. User selected specific indices: query each external database file directly and merge results in-memory!
             for db_path in external_dbs {
                 let p = std::path::Path::new(db_path);
                 if let Ok(conn) = rusqlite::Connection::open(p) {
-                    if let Ok(mut stmt) = conn.prepare(
-                        "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
-                         FROM FILES_CONTENT_FTS cfts
-                         JOIN FILES f ON f.file_id = cfts.file_id
-                         WHERE cfts.content MATCH ? 
-                         LIMIT ?"
-                    ) {
-                        if let Ok(rows) = stmt.query_map(params![search_query, limit], |row| {
+                    let mut query = "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
+                                     FROM FILES_CONTENT_FTS cfts
+                                     JOIN FILES f ON f.file_id = cfts.file_id
+                                     WHERE cfts.content MATCH ?".to_string();
+                    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(search_query.clone())];
+
+                    if let Some(min) = filter.min_size {
+                        query.push_str(" AND f.file_size >= ?");
+                        params.push(Box::new(min));
+                    }
+                    if let Some(max) = filter.max_size {
+                        query.push_str(" AND f.file_size <= ?");
+                        params.push(Box::new(max));
+                    }
+                    if let Some(min_t) = filter.min_mtime {
+                        query.push_str(" AND f.mtime >= ?");
+                        params.push(Box::new(min_t));
+                    }
+                    if let Some(ref exts) = filter.extensions {
+                        if !exts.is_empty() {
+                            for ext in exts {
+                                query.push_str(" AND f.file_path LIKE ?");
+                                params.push(Box::new(format!("%.{}", ext.to_lowercase())));
+                            }
+                        }
+                    }
+
+                    query.push_str(" LIMIT ?");
+                    params.push(Box::new(limit));
+
+                    if let Ok(mut stmt) = conn.prepare(&query) {
+                        let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+                        if let Ok(rows) = stmt.query_map(&params_ref[..], |row| {
                             Ok((
                                 row.get(0)?,
                                 row.get(1)?,
@@ -300,146 +369,47 @@ impl Database {
         Ok(results)
     }
 
+    pub fn search_files(&self, keyword: &str, filter: &SearchFilter, limit: usize) -> Result<Vec<(i64, String, bool, u64, u64)>> {
+        let mut query = "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime FROM FILES f".to_string();
+        let mut conditions = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    pub fn search_files(&self, keyword: &str, limit: usize) -> Result<Vec<(i64, String, bool, u64, u64)>> {
-
-
-        if keyword.trim().is_empty() {
-            let mut stmt = self.conn.prepare(
-                "SELECT file_id, file_path, is_dir, file_size, mtime 
-                 FROM FILES 
-                 LIMIT ?"
-            )?;
-            let rows = stmt.query_map(params![limit], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get::<_, i32>(2)? == 1,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            })?;
-            let mut results = Vec::new();
-            for r in rows {
-                if let Ok(item) = r {
-                    results.push(item);
-                }
-            }
-            return Ok(results);
+        let keyword_trimmed = keyword.trim();
+        if !keyword_trimmed.is_empty() {
+            query = "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
+                     FROM FILES_FTS fts
+                     JOIN FILES f ON f.file_id = fts.file_id".to_string();
+            conditions.push("FILES_FTS MATCH ?".to_string());
+            params.push(Box::new(format!("\"{}\" *", keyword_trimmed)));
         }
 
-        // 1. Try Substring (LIKE) Query first for 100% reliable CJK / Multi-language matches
-        let mut stmt_fallback = self.conn.prepare(
-            "SELECT file_id, file_path, is_dir, file_size, mtime 
-             FROM FILES 
-             WHERE file_path LIKE ? 
-             LIMIT ?"
-        )?;
-        let like_query = format!("%{}%", keyword);
-        let rows_fallback = stmt_fallback.query_map(params![like_query, limit], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get::<_, i32>(2)? == 1,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })?;
-
-        let mut results = Vec::new();
-        for r in rows_fallback {
-            if let Ok(item) = r {
-                results.push(item);
-            }
-        }
-
-        // 2. Supplement with FTS5 search if limit is not reached
-        if results.len() < limit {
-            let mut stmt_fts = self.conn.prepare(
-                "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
-                 FROM FILES_FTS fts
-                 JOIN FILES f ON f.file_id = fts.file_id
-                 WHERE FILES_FTS MATCH ? 
-                 LIMIT ?"
-            )?;
-            let search_query = format!("\"{}\" *", keyword);
-            let rows_fts = stmt_fts.query_map(params![search_query, limit - results.len()], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get::<_, i32>(2)? == 1,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            })?;
-            for r in rows_fts {
-                if let Ok(item) = r {
-                    if !results.iter().any(|x| x.0 == item.0) {
-                        results.push(item);
-                    }
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
-
-
-    pub fn get_file_content(&self, file_id: i64) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT compressed_text FROM FILE_CONTENTS WHERE file_id = ?"
-        )?;
-        let mut rows = stmt.query(params![file_id])?;
-        if let Some(row) = rows.next()? {
-            let compressed: Vec<u8> = row.get(0)?;
-            if let Ok(decompressed) = crate::crypto::decompress_zstd(&compressed) {
-                if let Ok(text) = String::from_utf8(decompressed) {
-                    return Ok(Some(text));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    pub fn search_files_filtered(
-        &self,
-        keyword: &str,
-        ext: Option<&str>,
-        min_size: Option<u64>,
-        max_size: Option<u64>,
-        min_mtime: Option<u64>,
-        max_mtime: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<(i64, String, bool, u64, u64)>> {
-        let mut query = "SELECT f.file_id, f.file_path, f.is_dir, f.file_size, f.mtime 
-                         FROM FILES_FTS fts
-                         JOIN FILES f ON f.file_id = fts.file_id
-                         WHERE FILES_FTS MATCH ?".to_string();
-        
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
-            Box::new(format!("\"{}\" *", keyword)),
-        ];
-
-        if let Some(e) = ext {
-            query.push_str(" AND f.file_path LIKE ?");
-            params.push(Box::new(format!("%.{}", e)));
-        }
-        if let Some(min) = min_size {
-            query.push_str(" AND f.file_size >= ?");
+        if let Some(min) = filter.min_size {
+            conditions.push("f.file_size >= ?".to_string());
             params.push(Box::new(min));
         }
-        if let Some(max) = max_size {
-            query.push_str(" AND f.file_size <= ?");
+        if let Some(max) = filter.max_size {
+            conditions.push("f.file_size <= ?".to_string());
             params.push(Box::new(max));
         }
-        if let Some(min_t) = min_mtime {
-            query.push_str(" AND f.mtime >= ?");
+        if let Some(min_t) = filter.min_mtime {
+            conditions.push("f.mtime >= ?".to_string());
             params.push(Box::new(min_t));
         }
-        if let Some(max_t) = max_mtime {
-            query.push_str(" AND f.mtime <= ?");
-            params.push(Box::new(max_t));
+        if let Some(ref exts) = filter.extensions {
+            if !exts.is_empty() {
+                let ext_conditions: Vec<String> = exts.iter()
+                    .map(|ext| {
+                        params.push(Box::new(format!("%.{}", ext.to_lowercase())));
+                        "f.file_path LIKE ?".to_string()
+                    })
+                    .collect();
+                conditions.push(format!("({})", ext_conditions.join(" OR ")));
+            }
+        }
+
+        if !conditions.is_empty() {
+            query.push_str(" WHERE ");
+            query.push_str(&conditions.join(" AND "));
         }
 
         query.push_str(" LIMIT ?");
@@ -465,42 +435,50 @@ impl Database {
             }
         }
 
-        if results.is_empty() {
-            let mut fallback_query = "SELECT file_id, file_path, is_dir, file_size, mtime 
-                                      FROM FILES 
-                                      WHERE file_path LIKE ?".to_string();
-            let mut fallback_params: Vec<Box<dyn rusqlite::ToSql>> = vec![
-                Box::new(format!("%{}%", keyword)),
-            ];
+        if results.is_empty() && !keyword_trimmed.is_empty() {
+            let mut fallback_query = "SELECT file_id, file_path, is_dir, file_size, mtime FROM FILES WHERE 1=1".to_string();
+            let mut fb_conditions = Vec::new();
+            let mut fb_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-            if let Some(e) = ext {
-                fallback_query.push_str(" AND file_path LIKE ?");
-                fallback_params.push(Box::new(format!("%.{}", e)));
+            fb_conditions.push("file_path LIKE ?".to_string());
+            fb_params.push(Box::new(format!("%{}%", keyword_trimmed)));
+
+            if let Some(min) = filter.min_size {
+                fb_conditions.push("file_size >= ?".to_string());
+                fb_params.push(Box::new(min));
             }
-            if let Some(min) = min_size {
-                fallback_query.push_str(" AND file_size >= ?");
-                fallback_params.push(Box::new(min));
+            if let Some(max) = filter.max_size {
+                fb_conditions.push("file_size <= ?".to_string());
+                fb_params.push(Box::new(max));
             }
-            if let Some(max) = max_size {
-                fallback_query.push_str(" AND file_size <= ?");
-                fallback_params.push(Box::new(max));
+            if let Some(min_t) = filter.min_mtime {
+                fb_conditions.push("mtime >= ?".to_string());
+                fb_params.push(Box::new(min_t));
             }
-            if let Some(min_t) = min_mtime {
-                fallback_query.push_str(" AND mtime >= ?");
-                fallback_params.push(Box::new(min_t));
+            if let Some(ref exts) = filter.extensions {
+                if !exts.is_empty() {
+                    let ext_conditions: Vec<String> = exts.iter()
+                        .map(|ext| {
+                            fb_params.push(Box::new(format!("%.{}", ext.to_lowercase())));
+                            "file_path LIKE ?".to_string()
+                        })
+                        .collect();
+                    fb_conditions.push(format!("({})", ext_conditions.join(" OR ")));
+                }
             }
-            if let Some(max_t) = max_mtime {
-                fallback_query.push_str(" AND mtime <= ?");
-                fallback_params.push(Box::new(max_t));
+
+            if !fb_conditions.is_empty() {
+                fallback_query.push_str(" AND ");
+                fallback_query.push_str(&fb_conditions.join(" AND "));
             }
 
             fallback_query.push_str(" LIMIT ?");
-            fallback_params.push(Box::new(limit));
+            fb_params.push(Box::new(limit));
 
-            let mut stmt_fallback = self.conn.prepare(&fallback_query)?;
-            let fallback_ref: Vec<&dyn rusqlite::ToSql> = fallback_params.iter().map(|p| p.as_ref()).collect();
+            let mut stmt_fb = self.conn.prepare(&fallback_query)?;
+            let fb_ref: Vec<&dyn rusqlite::ToSql> = fb_params.iter().map(|p| p.as_ref()).collect();
 
-            let rows_fallback = stmt_fallback.query_map(&fallback_ref[..], |row| {
+            let rows_fb = stmt_fb.query_map(&fb_ref[..], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -509,7 +487,8 @@ impl Database {
                     row.get(4)?,
                 ))
             })?;
-            for r in rows_fallback {
+
+            for r in rows_fb {
                 if let Ok(item) = r {
                     results.push(item);
                 }
@@ -517,6 +496,22 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    pub fn get_file_content(&self, file_id: i64) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT compressed_text FROM FILE_CONTENTS WHERE file_id = ?"
+        )?;
+        let mut rows = stmt.query(params![file_id])?;
+        if let Some(row) = rows.next()? {
+            let compressed: Vec<u8> = row.get(0)?;
+            if let Ok(decompressed) = crate::crypto::decompress_zstd(&compressed) {
+                if let Ok(text) = String::from_utf8(decompressed) {
+                    return Ok(Some(text));
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn backup_to<P: AsRef<Path>>(&self, dest_path: P) -> Result<()> {
@@ -614,7 +609,7 @@ mod tests {
         let file_id = db.insert_file("C:\\Test\\test.txt", 1024, 12345678, false).unwrap();
         assert!(file_id > 0);
         
-        let results = db.search_files("test", 10).unwrap();
+        let results = db.search_files("test", &SearchFilter::default(), 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].1, "C:\\Test\\test.txt");
         assert_eq!(results[0].3, 1024);
@@ -628,7 +623,7 @@ mod tests {
         let loaded_content = db.get_file_content(file_id).unwrap().unwrap();
         assert_eq!(loaded_content, plain_text);
 
-        let content_results = db.search_files_by_content("인덱싱", 10, &[]).unwrap();
+        let content_results = db.search_files_by_content("인덱싱", &SearchFilter::default(), 10, &[]).unwrap();
         assert_eq!(content_results.len(), 1);
         assert_eq!(content_results[0].1, "C:\\Test\\test.txt");
     }

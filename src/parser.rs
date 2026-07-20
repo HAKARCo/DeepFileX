@@ -6,63 +6,34 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::os::windows::ffi::OsStrExt;
 use winapi::um::libloaderapi::{LoadLibraryW, GetProcAddress, FreeLibrary};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-fn load_pdfium() -> Result<pdfium_render::prelude::Pdfium, String> {
-    use std::fs::write;
-    
-    let temp_dir = std::env::temp_dir();
-    let dll_path = temp_dir.join("DeepFileX_pdfium.dll");
-    
-    // Write embedded bytes if not exists or if size differs
-    let dll_bytes = include_bytes!("pdfium.dll");
-    let needs_write = if !dll_path.exists() {
-        true
-    } else {
-        std::fs::metadata(&dll_path)
-            .map(|m| m.len() != dll_bytes.len() as u64)
-            .unwrap_or(true)
-    };
-    
-    if needs_write {
-        if let Err(e) = write(&dll_path, dll_bytes) {
-            return Err(format!("Failed to dump embedded pdfium.dll: {}", e));
-        }
-    }
-    
-    // Bind directly to the written file path
-    let bindings = pdfium_render::prelude::Pdfium::bind_to_library(&dll_path)
-        .map_err(|e| format!("Failed to bind to pdfium.dll: {:?}", e))?;
-
-    Ok(pdfium_render::prelude::Pdfium::new(bindings))
-}
+pub static ENABLE_HWP_PLUGIN: AtomicBool = AtomicBool::new(true);
+pub static ENABLE_DWG_PLUGIN: AtomicBool = AtomicBool::new(true);
 
 pub fn extract_text_from_pdf<P: AsRef<Path>>(path: P) -> Result<String, String> {
-    let pdfium = load_pdfium()?;
-    
-    let doc_path = path.as_ref().to_string_lossy().to_string();
-    let document = pdfium.load_pdf_from_file(&doc_path, None)
-        .map_err(|e| format!("Failed to load PDF document: {:?}", e))?;
-        
+    let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
     let mut full_text = String::new();
-    for page in document.pages().iter() {
-        if let Ok(text) = page.text() {
-            full_text.push_str(&text.all());
-            full_text.push('\n');
+    let pages = doc.get_pages();
+    
+    let mut page_numbers: Vec<u32> = pages.keys().cloned().collect();
+    page_numbers.sort_unstable();
+    
+    for page_num in page_numbers {
+        if let Ok(page_text) = doc.extract_text(&[page_num]) {
+            full_text.push_str(&page_text);
+            full_text.push('\x0c'); // Page marker
         }
     }
-    
     Ok(full_text)
 }
 
 pub fn extract_text_from_docx<P: AsRef<Path>>(path: P) -> Result<String, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let mut doc_file = archive.by_name("word/document.xml").map_err(|e| e.to_string())?;
+    let doc_file = archive.by_name("word/document.xml").map_err(|e| e.to_string())?;
     
-    let mut content = Vec::new();
-    doc_file.read_to_end(&mut content).map_err(|e| e.to_string())?;
-    
-    let mut reader = Reader::from_reader(&content[..]);
+    let mut reader = Reader::from_reader(std::io::BufReader::with_capacity(4096, doc_file));
     let mut buf = Vec::new();
     let mut text = String::new();
     let mut in_t = false;
@@ -80,6 +51,9 @@ pub fn extract_text_from_docx<P: AsRef<Path>>(path: P) -> Result<String, String>
                     text.push_str(&t);
                 }
             }
+            Ok(Event::End(ref e)) if e.name().as_ref() == b"w:p" => {
+                text.push('\n'); // Preserve paragraph boundaries!
+            }
             Ok(Event::Eof) => break,
             Err(e) => return Err(e.to_string()),
             _ => {}
@@ -93,15 +67,12 @@ pub fn extract_text_from_xlsx<P: AsRef<Path>>(path: P) -> Result<String, String>
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     
-    let mut doc_file = match archive.by_name("xl/sharedStrings.xml") {
+    let doc_file = match archive.by_name("xl/sharedStrings.xml") {
         Ok(f) => f,
         Err(_) => return Ok(String::new()),
     };
     
-    let mut content = Vec::new();
-    doc_file.read_to_end(&mut content).map_err(|e| e.to_string())?;
-    
-    let mut reader = Reader::from_reader(&content[..]);
+    let mut reader = Reader::from_reader(std::io::BufReader::with_capacity(4096, doc_file));
     let mut buf = Vec::new();
     let mut text = String::new();
     let mut in_t = false;
@@ -254,12 +225,12 @@ pub fn extract_text<P: AsRef<Path>>(path: P) -> Result<String, String> {
     let path_buf = path_ref.to_path_buf();
 
     // 1. Try plugin loading first for specific high-performance target formats (e.g. hwp, dwg)
-    if ext == "hwp" || ext == "hwpx" {
+    if (ext == "hwp" || ext == "hwpx") && ENABLE_HWP_PLUGIN.load(Ordering::Relaxed) {
         if let Some(text) = try_extract_via_plugin(&path_buf, "hwp_parser") {
             return Ok(text);
         }
     }
-    if ext == "dwg" || ext == "dxf" {
+    if (ext == "dwg" || ext == "dxf") && ENABLE_DWG_PLUGIN.load(Ordering::Relaxed) {
         if let Some(text) = try_extract_via_plugin(&path_buf, "dwg_parser") {
             return Ok(text);
         }

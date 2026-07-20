@@ -6,6 +6,7 @@ use std::slice;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, GetLastError};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -103,7 +104,7 @@ pub fn open_volume_with_access(volume: &str, access: u32) -> Result<HANDLE, Stri
             FILE_SHARE_READ | FILE_SHARE_WRITE | 4, // Include FILE_SHARE_DELETE
             null_mut(),
             OPEN_EXISTING,
-            0,
+            FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
             0,
         )
     };
@@ -187,7 +188,7 @@ pub fn scan_mft(handle: HANDLE) -> Result<Vec<FileEntry>, String> {
         high_usn: usn_journal_data.next_usn,
     };
 
-    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB buffer
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
     let mut entries = Vec::new();
 
     loop {

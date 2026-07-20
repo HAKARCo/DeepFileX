@@ -1,1 +1,6 @@
 /target
+
+# Custom large database files
+*.db
+hakar_nlp_cache.db
+target/
