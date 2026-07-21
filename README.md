@@ -41,13 +41,11 @@ By building a secure local database index using parallel multi-threaded scanning
 - **Append-Only Diagnostic Log**: Appends all user & system events in real-time to `%USERPROFILE%\Documents\DeepFileX\Logs\blackbox_log.json` without overwriting historical logs.
 - **Rich Diagnostic Metadata**: Captures unique UUID `session_id`, `datetime` timestamps (`YYYY-MM-DD HH:MM:SS.mmm`), and formatted execution duration (`"145ms"`, `"5.981s"`).
 - **Lifecycle Tracking**: Automatically logs application `startup` and `shutdown` events (`eframe::App::on_exit`).
-- **100% English GUI**: Dedicated Top Menu Bar item (`🔒 Blackbox Logger`) with real-time log inspector dialog.
 
 ### ⚡ 2-Phase Engine Architecture & Performance
 - **Phase 1 (MFT Filename Scan)**: Reads 100% of all file and folder entries (including `.mp4`, `.exe`, `.zip`, `.pdf`, `.hwp`) for Everything-level sub-millisecond filename searching.
 - **Phase 2 (Content & AI Dispatcher)**: Early bypass (100% Skip) for non-document files before reaching heavy parsing pipelines, protecting CPU & RAM footprint by >90%.
 - **B-Tree SQL Query Optimization**: High-speed indexing queries without function wrapper overhead (`REPLACE(LOWER(...))`), cutting query response time to sub-millisecond speeds.
-- **Smart Loading Spinner**: Visual indicator (`🔍 Searching index databases... Please wait.`) shown only during active search queries before results populate.
 
 ### 📄 Native High-Performance Parsers
 - **Native HWP / HWPX Parser**: Built-in OLE2, Zstd, and XML text extraction natively compiled into core engine without requiring external DLL plugins.
