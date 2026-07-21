@@ -2,8 +2,8 @@
 
 **DeepFileX** - Ultra-Lightweight Desktop File **Contents** Search & Analysis Solution
 
-> **Latest**: v3.1.0 (2026-07-11)
-> [![Latest Release](https://img.shields.io/github/v/release/HAKARCo/DeepFileX)](https://github.com/HAKARCo/DeepFileX/releases)
+> **Latest**: v3.3.0 (2026-07-21)  
+> [![Latest Release](https://img.shields.io/github/v/release/HAKARCo/DeepFileX)](https://github.com/HAKARCo/DeepFileX/releases)  
 > [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE.txt)
 
 ---
@@ -12,7 +12,7 @@
 
 **DeepFileX** is a high-performance desktop search utility written in **Rust**. It is designed to scan, index, and retrieve not only **filenames** but also the **full-text content** of documents across your local storage. 
 
-By building a secure local database index using parallel multi-threaded scanning and SQLite FTS5, DeepFileX allows you to search through the actual contents of PDFs, Office documents, code files, and text files in milliseconds—completely offline, ensuring 100% data privacy.
+By building a secure local database index using parallel multi-threaded scanning and SQLite FTS5, DeepFileX allows you to search through the actual contents of PDFs, HWP/HWPX, Office documents, code files, and text files in milliseconds—completely offline, ensuring 100% data privacy.
 
 ---
 
@@ -21,14 +21,14 @@ By building a secure local database index using parallel multi-threaded scanning
 ### Build & Run from Source
 
 1. Ensure you have the Rust toolchain installed.
-2. Navigate to the project root and run:
+2. Navigate to the `hakar-core` directory and run:
    ```bash
    # Run in developer mode
    cargo run
    ```
 3. To compile the optimized, standalone release binary:
    ```bash
-   # Compile optimized binary
+   # Compile optimized release binary
    cargo build --release
    ```
 4. Find the standalone executable at: `target/release/DeepFileX.exe`
@@ -37,20 +37,22 @@ By building a secure local database index using parallel multi-threaded scanning
 
 ## ⭐ Core Features
 
-### 🔬 High-Performance File Analysis
-- **Advanced Format Support**: Full-text indexing for `.pdf`, `.docx`, `.xlsx`, `.txt`, `.csv`, `.log` and configuration/script files.
-- **Embedded Pdfium Engine**: Integrates Google Chromium's official Pdfium parser via static bundling (`include_bytes!`), achieving 99% accurate text extraction without external DLLs.
-- **Robust Unicode & Space Pathing**: Fixed Windows pathing locks on folders containing spaces or non-ASCII (Korean CJK) characters.
+### 🔒 Real-Time Blackbox JSON Diagnostic Logger
+- **Append-Only Diagnostic Log**: Appends all user & system events in real-time to `%USERPROFILE%\Documents\DeepFileX\Logs\blackbox_log.json` without overwriting historical logs.
+- **Rich Diagnostic Metadata**: Captures unique UUID `session_id`, `datetime` timestamps (`YYYY-MM-DD HH:MM:SS.mmm`), and formatted execution duration (`"145ms"`, `"5.981s"`).
+- **Lifecycle Tracking**: Automatically logs application `startup` and `shutdown` events (`eframe::App::on_exit`).
+- **100% English GUI**: Dedicated Top Menu Bar item (`🔒 Blackbox Logger`) with real-time log inspector dialog.
 
-### ⚡ Extreme Performance & Resource Efficiency
-- **Fast NTFS MFT Scan**: Rapid MFT parsing (under 0.2s for 1.6M files) with a fallback multi-threaded WalkDir directory scanner.
-- **SQLite FTS5 + RAM Search**: Instant content lookup (under 1ms) paired with sub-millisecond in-memory filename searching.
-- **Data Compression**: Cache text metadata efficiently using Zstd Lv3 compression to maintain a minimal storage footprint.
+### ⚡ 2-Phase Engine Architecture & Performance
+- **Phase 1 (MFT Filename Scan)**: Reads 100% of all file and folder entries (including `.mp4`, `.exe`, `.zip`, `.pdf`, `.hwp`) for Everything-level sub-millisecond filename searching.
+- **Phase 2 (Content & AI Dispatcher)**: Early bypass (100% Skip) for non-document files before reaching heavy parsing pipelines, protecting CPU & RAM footprint by >90%.
+- **B-Tree SQL Query Optimization**: High-speed indexing queries without function wrapper overhead (`REPLACE(LOWER(...))`), cutting query response time to sub-millisecond speeds.
+- **Smart Loading Spinner**: Visual indicator (`🔍 Searching index databases... Please wait.`) shown only during active search queries before results populate.
 
-### 🎨 Premium & Compact UI
-- **Single Executable**: Packs all GUI, database, and PDF engines into a **single binary under 5MB** (uncompressed).
-- **Clean Subsystem**: Completely hides the debug CMD console window in release builds for a native, clean GUI experience.
-- **Branded Design**: Window title bar and taskbar icons are dynamically bound to the DFX brand logo via runtime pixel injection.
+### 📄 Native High-Performance Parsers
+- **Native HWP / HWPX Parser**: Built-in OLE2, Zstd, and XML text extraction natively compiled into core engine without requiring external DLL plugins.
+- **Embedded Pdfium Engine**: Integrates Google Chromium's official Pdfium parser via static bundling (`include_bytes!`), achieving 99% accurate PDF text extraction.
+- **SQLite FTS5 + Compression**: Ultra-fast content lookup paired with Zstd Lv3 text compression for minimal disk footprint.
 
 ---
 
@@ -60,62 +62,44 @@ DeepFileX employs a hybrid indexing strategy: dedicated high-performance parsers
 
 | Category | Extensions | Search Level / Implementation |
 | :--- | :--- | :---: |
-| **📄 Documents** | `.pdf` | **Full-Text** (Dedicated Embedded Pdfium) |
-| **📁 Word/Excel** | `.docx`, `.xlsx` | **Full-Text** (Dedicated XML/Zip Parsers) |
+| **📄 PDF Documents** | `.pdf` | **Full-Text** (Dedicated Embedded Pdfium) |
+| **🇰🇷 HWP / HWPX** | `.hwp`, `.hwpx` | **Full-Text** (Native Core OLE2 / Zstd / XML Engine) |
+| **📁 Word / Excel / PPT** | `.docx`, `.xlsx`, `.pptx` | **Full-Text** (Dedicated XML/Zip Parsers) |
 | **⚙️ Configs & Scripts** | `.yaml`, `.yml`, `.ini`, `.cfg`, `.conf`, `.toml`, `.env`, `.properties`, `.txt`, `.csv`, `.log`, `.srt`, `.vtt`, `.md`, `.json`, `.xml` | **Full-Text** (Dedicated Text Parser) |
 | **💻 Code Files** | `.py`, `.js`, `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.rs`, `.go`, `.sh`, `.bat`, `.html`, `.css` | **Full-Text** (Dedicated Text Parser) |
-| **Fallback Extraction** | `.pptx`, `.ppt`, `.doc`, `.xls`, `.hwp`, `.hwpx`, `.dwg`, `.dxf`, etc. | **Full-Text Fallback** (Universal Binary Strings Extractor) |
-| **📦 Dynamic Plugins** | `.hwp`, `.hwpx`, `.dwg`, `.dxf` (Dedicated Parsers) | **Full-Text** (Planned for v3.2 via DLL FFI) |
-| **🖼️ Media & Archives** | `.zip`, `.png`, `.jpg`, `.dat`, `.bin`, `.dll`, `.exe`, etc. | *Filename Only* |
+| **🔌 Dynamic Plugins** | `.dwg`, `.dxf` | **Full-Text** (Optional Dynamic CAD DLL Plugin via `🔌 Plugins Manager`) |
+| **🖼️ Media & Archives** | `.zip`, `.png`, `.jpg`, `.mp4`, `.avi`, `.dat`, `.bin`, `.dll`, `.exe`, etc. | *Filename Search Only* (Phase 2 Early Bypass) |
 
 ---
 
 ## 💾 System Requirements
 
-- **OS**: Windows 10+ (64-bit)
+- **OS**: Windows 10 / 11 (64-bit)
 - **RAM**: 4GB+ recommended
-- **Storage**: Less than 10MB (Single binary size: ~4.46MB)
-- **Rust Toolchain**: 1.70+ (Developer compilation only)
+- **Storage**: Less than 10MB (Single binary size: ~4.5MB)
+- **Rust Toolchain**: 1.75+ (Developer compilation only)
 
 ---
 
 ## 📊 Performance Metrics
 
-- **First Scan Speed (MFT)**: Under 5 seconds for 1.6 Million files
-- **Search Response Time**: ~0.1 milliseconds
-- **Idle Memory Footprint**: **Under 10MB**
-- **Active Scan Memory Footprint**: **Under 30MB**
-- **Standalone Binary Size**: **~4.46MB** (LTO & Strip optimized)
-
----
-
-## 🔧 Usage
-
-### 1️⃣ File Scanning
-1. Open the application.
-2. Enter the path in the "Scan Folder" field or select it via the native directory dialog.
-3. Click "Scan Folder" to begin the indexing process.
-
-### 2️⃣ Fast Search
-1. Type search queries into the main input field.
-2. Press Enter or click the Search button to view matching filenames or content snippets instantly.
-3. Select any file from the results table to preview details and context matches in the sidebar.
-
-### 3️⃣ Index Persistence
-- **Save Index**: Commits scanned file paths and compressed FTS5 content to the local `.hidx` index database.
-- **Load Index**: Instantly loads the saved metadata from disk to bypass initial drive scanning upon startup.
+- **First Scan Speed (MFT)**: Under 5 seconds for 1.8 Million files
+- **Search Response Time**: Sub-millisecond (~0.1ms)
+- **Idle Memory Footprint**: Under 10MB
+- **Active Scan Memory Footprint**: Under 30MB
+- **Standalone Binary Size**: ~4.5MB (LTO & Strip optimized)
 
 ---
 
 ## 📈 Recent Updates
 
-### v3.1.0 (2026-07-11)
-- 🔷 Re-engineered entire architecture from Python/PyQt6 to Rust/egui.
-- 🔷 Integrated Google's Pdfium engine statically (`include_bytes!`) for accurate PDF text parsing.
-- 🔷 Fixed major Windows pathing locks on CJK/space-containing paths.
-- 🔷 Replaced `SUBSTR` logic with SQLite `NOT LIKE` prefix queries to prevent database clean loss.
-- 🔷 Hid the development CMD console window in release builds.
-- 🔷 Applied custom DFX branding icon dynamically to window viewport and taskbar.
+### v3.3.0 (2026-07-21)
+- 🔒 **Real-Time Blackbox JSON Logger**: Added append-only logging to `%USERPROFILE%/Documents/DeepFileX/Logs/blackbox_log.json` with UUID session tracking, datetime, duration, and 100% English GUI.
+- ⚡ **2-Phase Engine Architecture**: Implemented Phase 1 MFT 100% filename scan + Phase 2 Content/AI Dispatcher 100% early skip for non-document files.
+- 🚀 **B-Tree SQL Query Optimization**: Removed function wrappers (`REPLACE(LOWER(...))`) on external DB queries for instant B-Tree search responses.
+- 🔍 **Smart Loading Indicator**: Display `Searching index databases...` loading spinner only after typing non-empty search queries before results render.
+- ⚙️ **Dedicated Update Check Dialog**: Separated `⚙️ Settings...` from `🔄 Check for Updates` in top menu.
+- 🔌 **Streamlined Plugin Manager**: Removed HWP/HWPX from Plugin Manager UI since HWP/HWPX parsing is 100% natively built into core engine.
 
 📖 See [CHANGELOG.md](CHANGELOG.md) for complete historical details.
 
@@ -129,10 +113,11 @@ DeepFileX employs a hybrid indexing strategy: dedicated high-performance parsers
 hakar-core/
 ├── src/                  # Rust source code
 │   ├── main.rs           # GUI Application Entry (egui)
-│   ├── parser.rs         # File text extractors (Pdfium, zip, xml)
+│   ├── parser.rs         # File text extractors (Pdfium, HWP, zip, xml)
 │   ├── db.rs             # SQLite FTS5 database mapping
 │   ├── ntfs.rs           # NTFS MFT parser
-│   └── dfx_logo.png      # Brand logo image asset
+│   ├── blackbox/         # Real-time JSON Blackbox Logger subsystem
+│   └── update/           # Auto-updater subsystem
 ├── Cargo.toml            # Dependencies and Release profiles
 ├── build.rs              # Windows resource compiler (icon mapping)
 └── README.md             # Project documentation
@@ -140,14 +125,14 @@ hakar-core/
 
 ### Build Command
 
-To rebuild the production-ready optimized executable, run:
+To compile the production-ready optimized executable, run:
 ```bash
 cargo build --release
 ```
-The output binary will be written to `target/release/DeepFileX.exe`.
+The output binary will be generated at `target/release/DeepFileX.exe`.
 
 ---
 
 ## 🤝 Contributing
 
-This is a proprietary utility belonging to **HAKAR**. External contributions require signing a NDA.
+This is a proprietary utility belonging to **HAKAR**. External contributions require signing an NDA.
