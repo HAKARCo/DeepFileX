@@ -1,6 +1,7 @@
+#[cfg(feature = "auto-update")]
 use std::fs;
-use std::path::{Path, PathBuf};
-use crate::update::error::{UpdateError, Result};
+use std::path::PathBuf;
+use crate::update::error::Result;
 
 /// 백업 폴더 루트 경로 반환
 pub fn get_backup_root() -> PathBuf {
@@ -12,6 +13,7 @@ pub fn get_backup_root() -> PathBuf {
 }
 
 /// 실행 파일과 설정을 지정된 버전 식별자와 타임스탬프로 백업해.
+#[cfg(feature = "auto-update")]
 pub fn create_backup(version: &str) -> Result<String> {
     let backup_id = format!("{}_{}", version, chrono::Local::now().format("%Y%m%d_%H%M%S"));
     let backup_dir = get_backup_root().join(&backup_id);
@@ -35,7 +37,13 @@ pub fn create_backup(version: &str) -> Result<String> {
     Ok(backup_id)
 }
 
+#[cfg(not(feature = "auto-update"))]
+pub fn create_backup(_version: &str) -> Result<String> {
+    Ok(String::new())
+}
+
 /// 백업 유지 정책: 가장 오래된 백업을 제거하여 최대 3개까지만 보관해.
+#[cfg(feature = "auto-update")]
 pub fn enforce_retention_policy() -> Result<()> {
     let root = get_backup_root();
     if !root.exists() {
@@ -67,5 +75,10 @@ pub fn enforce_retention_policy() -> Result<()> {
         }
     }
     
+    Ok(())
+}
+
+#[cfg(not(feature = "auto-update"))]
+pub fn enforce_retention_policy() -> Result<()> {
     Ok(())
 }

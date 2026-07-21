@@ -211,6 +211,35 @@ impl Database {
         Ok(())
     }
 
+    pub fn save_content_batch(&self, batch: &[(i64, Vec<u8>, String)]) -> Result<()> {
+        self.conn.execute("BEGIN TRANSACTION", [])?;
+        let res = (|| -> Result<()> {
+            let mut stmt_fc = self.conn.prepare(
+                "INSERT OR REPLACE INTO FILE_CONTENTS (file_id, compressed_text) VALUES (?, ?)"
+            )?;
+            let mut stmt_del_fts = self.conn.prepare(
+                "DELETE FROM FILES_CONTENT_FTS WHERE file_id = ?"
+            )?;
+            let mut stmt_ins_fts = self.conn.prepare(
+                "INSERT INTO FILES_CONTENT_FTS (file_id, content) VALUES (?, ?)"
+            )?;
+
+            for (file_id, compressed_data, plain_text) in batch {
+                stmt_fc.execute(params![file_id, compressed_data])?;
+                let _ = stmt_del_fts.execute(params![file_id]);
+                stmt_ins_fts.execute(params![file_id, plain_text])?;
+            }
+            Ok(())
+        })();
+
+        if res.is_ok() {
+            self.conn.execute("COMMIT", [])?;
+        } else {
+            let _ = self.conn.execute("ROLLBACK", []);
+        }
+        res
+    }
+
     pub fn get_all_document_files(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT file_id, file_path FROM FILES 
@@ -218,9 +247,17 @@ impl Database {
                 file_path LIKE '%.pdf' OR 
                 file_path LIKE '%.docx' OR 
                 file_path LIKE '%.xlsx' OR 
+                file_path LIKE '%.pptx' OR 
+                file_path LIKE '%.hwp' OR 
+                file_path LIKE '%.hwpx' OR 
                 file_path LIKE '%.txt' OR 
                 file_path LIKE '%.csv' OR 
-                file_path LIKE '%.log'
+                file_path LIKE '%.log' OR 
+                file_path LIKE '%.md' OR 
+                file_path LIKE '%.json' OR 
+                file_path LIKE '%.xml' OR 
+                file_path LIKE '%.yaml' OR 
+                file_path LIKE '%.yml'
              )"
         )?;
         let rows = stmt.query_map([], |row| {

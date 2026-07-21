@@ -8,6 +8,7 @@ use std::path::Path;
 use reqwest::blocking::Client;
 #[cfg(feature = "auto-update")]
 use reqwest::header::RANGE;
+#[cfg(feature = "auto-update")]
 use crate::update::error::{UpdateError, Result};
 
 #[cfg(feature = "auto-update")]

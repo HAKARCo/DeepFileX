@@ -1,4 +1,6 @@
+#[cfg(feature = "auto-update")]
 use std::collections::HashMap;
+#[cfg(feature = "auto-update")]
 use crate::update::error::{UpdateError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -140,6 +142,7 @@ pub struct Manifest {
     pub channels: HashMap<Channel, ChannelInfo>,
 }
 
+#[cfg(feature = "auto-update")]
 impl Manifest {
     #[cfg(feature = "auto-update")]
     pub fn from_json(json_str: &str) -> Result<Self> {

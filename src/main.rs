@@ -72,7 +72,9 @@ struct DeepFileXApp {
     update_context: Arc<Mutex<deepfilex::update::UpdateContext>>,
     show_about: bool,
     show_update_settings: bool,
+    show_update_check_dialog: bool,
     show_plugins_settings: bool,
+    is_searching: bool,
 }
 
 fn parse_size_limit(s: &str) -> Option<u64> {
@@ -148,10 +150,23 @@ impl DeepFileXApp {
             update_context: Arc::new(Mutex::new(deepfilex::update::UpdateContext::default())),
             show_about: false,
             show_update_settings: false,
+            show_update_check_dialog: false,
             show_plugins_settings: false,
+            is_searching: false,
         };
 
         app.refresh_loaded_indices();
+
+        let logger = deepfilex::blackbox::get_global_logger();
+        logger.log_event(
+            deepfilex::blackbox::types::EventType::System,
+            "app_lifecycle",
+            "startup",
+            Some(serde_json::json!({ "version": "3.3.0", "status": "started" })),
+            deepfilex::blackbox::types::EventResult::Success,
+            None,
+        );
+        logger.flush();
         
         if app.update_config.enabled && app.update_config.auto_check {
             deepfilex::update::trigger_update_check(app.update_context.clone(), app.update_config.clone());
@@ -248,11 +263,16 @@ impl DeepFileXApp {
                         let path = e.path();
                         if path.is_dir() {
                             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                if name == "Windows" || name == "Program Files" || name == "Program Files (x86)"
-                                    || name == "$Recycle.Bin" || name == "System Volume Information"
-                                    || name == "AppData" || name == "node_modules" || name == ".git"
-                                    || name == "target" || name == ".cargo" || name == ".rustup"
-                                    || name == "Local" || name == "Roaming" || name.starts_with('.')
+                                if name.eq_ignore_ascii_case("Windows") || name.eq_ignore_ascii_case("Program Files")
+                                    || name.eq_ignore_ascii_case("Program Files (x86)") || name.eq_ignore_ascii_case("$Recycle.Bin")
+                                    || name.eq_ignore_ascii_case("System Volume Information") || name.eq_ignore_ascii_case("AppData")
+                                    || name.eq_ignore_ascii_case("node_modules") || name.eq_ignore_ascii_case(".git")
+                                    || name.eq_ignore_ascii_case("target") || name.eq_ignore_ascii_case(".cargo")
+                                    || name.eq_ignore_ascii_case(".rustup") || name.eq_ignore_ascii_case("Local")
+                                    || name.eq_ignore_ascii_case("Roaming") || name.eq_ignore_ascii_case("Temp")
+                                    || name.eq_ignore_ascii_case("$WINDOWS.~BT") || name.eq_ignore_ascii_case("$WinREAgent")
+                                    || name.eq_ignore_ascii_case("Config.Msi") || name.eq_ignore_ascii_case("MSOCache")
+                                    || name.eq_ignore_ascii_case("Recovery") || name.starts_with('.')
                                 {
                                     return false;
                                 }
@@ -352,8 +372,19 @@ impl DeepFileXApp {
         });
     }
 
+
+
     fn search(&mut self, ctx: &egui::Context) {
         let query = self.search_query.clone();
+
+        deepfilex::blackbox::facade::get_global_logger().log_event(
+            deepfilex::blackbox::types::EventType::Search,
+            "search_bar",
+            "query_submit",
+            Some(serde_json::json!({ "query": &query })),
+            deepfilex::blackbox::types::EventResult::Success,
+            None,
+        );
 
         if !self.search_file_name && !self.search_content {
             self.results.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -363,6 +394,8 @@ impl DeepFileXApp {
             self.pending_live_search = false;
             return;
         }
+
+        self.is_searching = !query.trim().is_empty();
 
         // Build SearchFilter
         let min_mtime = match self.filter_date_range {
@@ -482,6 +515,7 @@ impl DeepFileXApp {
             }
             *self.results.lock().unwrap_or_else(|e| e.into_inner()) = final_results;
             self.status_message = "Ready to search.".to_string();
+            self.is_searching = false;
             return;
         }
 
@@ -493,7 +527,7 @@ impl DeepFileXApp {
                 for db_path in &external_dbs {
                     let p = std::path::Path::new(db_path);
                     if let Ok(conn) = rusqlite::Connection::open(p) {
-                        let mut query_str = "SELECT file_id, file_path, is_dir, file_size, mtime FROM FILES WHERE REPLACE(LOWER(file_path), '/', '\\') LIKE ?".to_string();
+                        let mut query_str = "SELECT file_id, file_path, is_dir, file_size, mtime FROM FILES WHERE file_path LIKE ?".to_string();
                         let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(like_query.clone())];
                         if let Some(min) = filter.min_size {
                             query_str.push_str(" AND file_size >= ?");
@@ -591,6 +625,7 @@ impl DeepFileXApp {
             });
             self.status_message = "Searching database contents asynchronously...".to_string();
         }
+        self.is_searching = false;
     }
 
 
@@ -647,7 +682,7 @@ impl DeepFileXApp {
                             .and_then(|e| e.to_str())
                             .unwrap_or("");
                         
-                        if matches!(ext, "pdf" | "docx" | "xlsx" | "txt" | "csv" | "log" | "srt" | "vtt" | "md" | "json" | "xml" | "yaml" | "yml" | "ini" | "toml") {
+                        if matches!(ext, "pdf" | "docx" | "xlsx" | "pptx" | "hwp" | "hwpx" | "txt" | "csv" | "log" | "srt" | "vtt" | "md" | "json" | "xml" | "yaml" | "yml" | "ini" | "toml") {
                             let mut size = 0;
                             let mut mtime = 0;
                             if let Ok(meta) = entry.metadata() {
@@ -821,12 +856,24 @@ fn force_enable_ime() {
 }
 
 impl eframe::App for DeepFileXApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let logger = deepfilex::blackbox::get_global_logger();
+        logger.log_event(
+            deepfilex::blackbox::types::EventType::System,
+            "app_lifecycle",
+            "shutdown",
+            Some(serde_json::json!({ "version": "3.3.0", "status": "terminated" })),
+            deepfilex::blackbox::types::EventResult::Success,
+            None,
+        );
+        logger.flush();
+    }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.pending_live_search && self.last_input_time.elapsed().as_millis() >= 250 {
             self.pending_live_search = false;
             self.search(ctx);
         }
-        if self.pending_live_search {
+        if self.pending_live_search || self.is_searching {
             ctx.request_repaint();
         }
 
@@ -884,6 +931,7 @@ impl eframe::App for DeepFileXApp {
                         ui.close_menu();
                     }
                     if ui.button("🔄 Check for Updates").clicked() {
+                        self.show_update_check_dialog = true;
                         deepfilex::update::trigger_update_check(
                             self.update_context.clone(),
                             self.update_config.clone(),
@@ -895,6 +943,52 @@ impl eframe::App for DeepFileXApp {
                 ui.menu_button("🔌 Plugins", |ui| {
                     if ui.button("⚙️ Manage Plugins...").clicked() {
                         self.show_plugins_settings = true;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("🔒 Blackbox Logger", |ui| {
+                    let logger = deepfilex::blackbox::get_global_logger();
+                    let mut cfg = logger.get_config();
+                    let mut changed = false;
+
+                    if ui.checkbox(&mut cfg.enabled, "Enable Blackbox Logger").changed() {
+                        changed = true;
+                    }
+
+                    if changed {
+                        logger.update_config(cfg);
+                    }
+
+                    ui.separator();
+
+                    if ui.button("📥 Export JSON Logs").clicked() {
+                        let default_dir = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
+                        let logs_dir = std::path::PathBuf::from(default_dir).join("Documents").join("DeepFileX").join("Logs");
+                        let _ = std::fs::create_dir_all(&logs_dir);
+                        let dest_path = logs_dir.join("blackbox_export.json");
+                        if logger.export_logs(&dest_path, deepfilex::blackbox::exporter::ExportFormat::Json).is_ok() {
+                            self.status_message = format!("Exported logs to {}", dest_path.to_string_lossy());
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("📥 Export CSV Logs").clicked() {
+                        let default_dir = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
+                        let logs_dir = std::path::PathBuf::from(default_dir).join("Documents").join("DeepFileX").join("Logs");
+                        let _ = std::fs::create_dir_all(&logs_dir);
+                        let dest_path = logs_dir.join("blackbox_export.csv");
+                        if logger.export_logs(&dest_path, deepfilex::blackbox::exporter::ExportFormat::Csv).is_ok() {
+                            self.status_message = format!("Exported logs to {}", dest_path.to_string_lossy());
+                        }
+                        ui.close_menu();
+                    }
+
+                    ui.separator();
+
+                    if ui.button("🗑 Clear All Logs").clicked() {
+                        let _ = logger.clear_logs();
+                        self.status_message = "Blackbox log buffer cleared.".to_string();
                         ui.close_menu();
                     }
                 });
@@ -921,19 +1015,9 @@ impl eframe::App for DeepFileXApp {
                     ui.label(egui::RichText::new("Enable or disable dynamic text extraction plugins:").weak());
                     ui.add_space(5.0);
 
-                    // HWP Plugin
-                    let mut hwp_active = deepfilex::parser::ENABLE_HWP_PLUGIN.load(std::sync::atomic::Ordering::Relaxed);
-                    if ui.checkbox(&mut hwp_active, "Enable HWP Parser").changed() {
-                        deepfilex::parser::ENABLE_HWP_PLUGIN.store(hwp_active, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    let hwp_status = if std::path::Path::new("plugins/hwp_parser.dll").exists() { "Detected" } else { "Not Found" };
-                    ui.label(egui::RichText::new(format!("  - Status: {} (plugins/hwp_parser.dll)", hwp_status)).weak().small());
-
-                    ui.add_space(10.0);
-
-                    // DWG Plugin
+                    // DWG / CAD Plugin
                     let mut dwg_active = deepfilex::parser::ENABLE_DWG_PLUGIN.load(std::sync::atomic::Ordering::Relaxed);
-                    if ui.checkbox(&mut dwg_active, "Enable DWG Parser").changed() {
+                    if ui.checkbox(&mut dwg_active, "Enable DWG / CAD Parser").changed() {
                         deepfilex::parser::ENABLE_DWG_PLUGIN.store(dwg_active, std::sync::atomic::Ordering::Relaxed);
                     }
                     let dwg_status = if std::path::Path::new("plugins/dwg_parser.dll").exists() { "Detected" } else { "Not Found" };
@@ -991,14 +1075,9 @@ impl eframe::App for DeepFileXApp {
                     }
 
                     ui.add_enabled_ui(config.enabled, |ui| {
-                        if ui.checkbox(&mut config.auto_check, "Auto check periodically").changed() {
+                        if ui.checkbox(&mut config.auto_download, "Auto download updates").changed() {
                             config_changed = true;
                         }
-                        ui.add_enabled_ui(config.auto_check, |ui| {
-                            if ui.checkbox(&mut config.auto_download, "Auto download updates").changed() {
-                                config_changed = true;
-                            }
-                        });
 
                         ui.horizontal(|ui| {
                             ui.label("Channel:");
@@ -1018,16 +1097,6 @@ impl eframe::App for DeepFileXApp {
                                 });
                             if channel_res.inner.unwrap_or(false) {
                                 config.channel = selected_channel;
-                                config_changed = true;
-                            }
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Check Interval (hours):");
-                            let mut val = config.check_interval_hours;
-                            let slider = ui.add(egui::Slider::new(&mut val, 1..=168));
-                            if slider.changed() {
-                                config.check_interval_hours = val;
                                 config_changed = true;
                             }
                         });
@@ -1076,6 +1145,60 @@ impl eframe::App for DeepFileXApp {
                     });
                 });
             self.show_update_settings = show;
+        }
+
+        // Dedicated Check for Updates Dialog Window
+        if self.show_update_check_dialog {
+            let mut show = self.show_update_check_dialog;
+            let mut close_clicked = false;
+            egui::Window::new("🔄 Check for Updates")
+                .open(&mut show)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.heading("DeepFileX v3.3.0");
+                    ui.add_space(8.0);
+
+                    let (state_text, progress, err_msg, checking) = {
+                        let lock = self.update_context.lock().unwrap();
+                        let checking = lock.state == deepfilex::update::UpdateState::Checking ||
+                            lock.state == deepfilex::update::UpdateState::Downloading ||
+                            lock.state == deepfilex::update::UpdateState::Verifying ||
+                            lock.state == deepfilex::update::UpdateState::Installing;
+                        let progress = if lock.total_bytes > 0 {
+                            Some(lock.downloaded_bytes as f32 / lock.total_bytes as f32)
+                        } else {
+                            None
+                        };
+                        (lock.state.as_str().to_string(), progress, lock.error_message.clone(), checking)
+                    };
+
+                    ui.label(egui::RichText::new(format!("Status: {}", state_text)).strong());
+                    
+                    if let Some(pct) = progress {
+                        ui.add_space(5.0);
+                        ui.add(egui::ProgressBar::new(pct).text(format!("{:.1}%", pct * 100.0)));
+                    }
+                    if let Some(err) = err_msg {
+                        ui.add_space(5.0);
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("Error: {}", err));
+                    }
+
+                    ui.add_space(15.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!checking, egui::Button::new("Check Again")).clicked() {
+                            deepfilex::update::trigger_update_check(
+                                self.update_context.clone(),
+                                self.update_config.clone(),
+                            );
+                        }
+                        if ui.button("Close").clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                });
+            self.show_update_check_dialog = show && !close_clicked;
         }
 
         // Detect background indexing thread completion to refresh loaded paths
@@ -1181,6 +1304,7 @@ impl eframe::App for DeepFileXApp {
                                 self.show_delete_confirm = Some(targets);
                             }
                         });
+
                     });
                 });
         }       // Bottom Status Bar
@@ -1258,23 +1382,33 @@ impl eframe::App for DeepFileXApp {
                                 let query_lower = query.to_lowercase();
                                 
                                 if let Some(idx) = content_lower.find(&query_lower) {
-                                    let start = idx.saturating_sub(100);
-                                    let end = std::cmp::min(content.len(), idx + query.len() + 100);
+                                    let raw_start = idx.saturating_sub(100);
+                                    let start = (0..=raw_start).rev().find(|&i| content.is_char_boundary(i)).unwrap_or(0);
                                     
+                                    let query_end_byte = idx + query_lower.len();
+                                    let query_end = (query_end_byte..=content.len()).find(|&i| content.is_char_boundary(i)).unwrap_or(content.len());
+
+                                    let raw_end = std::cmp::min(content.len(), query_end + 100);
+                                    let end = (raw_end..=content.len()).find(|&i| content.is_char_boundary(i)).unwrap_or(content.len());
+
                                     ui.horizontal_wrapped(|ui| {
                                         ui.spacing_mut().item_spacing.x = 0.0;
                                         
                                         if start > 0 {
                                             ui.label("... ");
                                         }
-                                        ui.label(&content[start..idx]);
+                                        if start < idx {
+                                            ui.label(&content[start..idx]);
+                                        }
                                         
-                                        ui.label(egui::RichText::new(&content[idx..idx + query.len()])
+                                        ui.label(egui::RichText::new(&content[idx..query_end])
                                             .strong()
                                             .background_color(egui::Color32::from_rgb(255, 140, 0))
                                             .color(egui::Color32::WHITE));
                                         
-                                        ui.label(&content[idx + query.len()..end]);
+                                        if query_end < end {
+                                            ui.label(&content[query_end..end]);
+                                        }
                                         if end < content.len() {
                                             ui.label(" ...");
                                         }
@@ -1295,7 +1429,7 @@ impl eframe::App for DeepFileXApp {
         // Central Panel: Results
         egui::CentralPanel::default().show(ctx, |ui| {
             let admin_status = if is_user_admin() { " [Admin]" } else { " [Non-Admin]" };
-            ui.heading(format!("DeepFileX v3.1.0 - Rust Native{}", admin_status));
+            ui.heading(format!("DeepFileX v3.3.0 - Rust Native{}", admin_status));
 
             // Beautiful glassmorphic backup prompt banner (Borrow Checker bypass via short-lived lock scope)
             let prompt_folder = {
@@ -1349,6 +1483,14 @@ impl eframe::App for DeepFileXApp {
                                     .add_filter("SQLite Database", &["db"])
                                     .save_file() 
                                 {
+                                     if let Some(filename_str) = dest_path.file_name().and_then(|n| n.to_str()) {
+                                         let fn_owned = filename_str.to_string();
+                                         if !self.loaded_indices.contains(&fn_owned) {
+                                             self.loaded_indices.insert(0, fn_owned.clone());
+                                         }
+                                         self.selected_indices.insert(fn_owned);
+                                     }
+
                                     let db_arc = self.db.clone();
                                     let ctx_clone = ctx.clone();
                                     let folder_path_clone_t = folder_path_clone.clone();
@@ -1356,10 +1498,11 @@ impl eframe::App for DeepFileXApp {
                                     let is_saving_t = self.is_saving_index.clone();
 
                                     *is_saving_t.lock().unwrap() = true;
+                                    self.was_saving_index = true;
                                     self.status_message = "Saving index database in background...".to_string();
 
                                     std::thread::spawn(move || {
-                                        let mut success = false;
+                                        let mut _success = false;
                                         if let Ok(db) = db_arc.lock() {
                                             if db.backup_to(&dest_path_t).is_ok() {
                                                 if let Ok(conn) = rusqlite::Connection::open(&dest_path_t) {
@@ -1397,7 +1540,7 @@ impl eframe::App for DeepFileXApp {
                                                     // C. Compact
                                                     let _ = conn.execute("PRAGMA journal_mode = DELETE", []);
                                                     let _ = conn.execute("VACUUM", []);
-                                                    success = true;
+                                                    _success = true;
                                                 }
                                             }
                                         }
@@ -1532,10 +1675,18 @@ impl eframe::App for DeepFileXApp {
             }
 
 
-            ui.label(&self.status_message);
             let primary_items = self.results.lock().unwrap_or_else(|e| e.into_inner());
             let mut items = primary_items.clone();
             drop(primary_items);
+
+            if self.is_searching && !self.search_query.trim().is_empty() && items.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(egui::RichText::new("🔍 Searching index databases... Please wait.").color(egui::Color32::from_rgb(100, 180, 255)).strong());
+                });
+            } else {
+                ui.label(&self.status_message);
+            }
 
             // Sort items dynamically by selected column and direction
             items.sort_by(|a, b| {

@@ -1,6 +1,6 @@
 [package]
 name = "deepfilex"
-version = "3.1.0"
+version = "3.3.0"
 edition = "2024"
 
 [[bin]]
@@ -37,14 +37,14 @@ rfd = "0.12"          # 폴더/파일 선택 네이티브 다이얼로그용
 encoding_rs = "0.8"
 flate2 = "1.0"
 image = "0.24"        # 런타임 윈도우 로고 아이콘 디코더용
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # 자동 업데이트 피처 관련 선택적 종속성 (v3.2 추가)
 reqwest = { version = "0.11", features = ["blocking", "rustls-tls", "json"], optional = true }
-serde_json = { version = "1.0", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
 
 [features]
-auto-update = ["dep:reqwest", "dep:serde_json", "dep:serde"]
+auto-update = ["dep:reqwest"]
 
 [profile.release]
 opt-level = "z"

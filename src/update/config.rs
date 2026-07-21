@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::PathBuf;
 use crate::update::manifest::Channel;
 
@@ -15,8 +14,8 @@ pub struct UpdateConfig {
 impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            auto_check: false,
+            enabled: true,
+            auto_check: true,
             auto_download: false,
             channel: Channel::Stable,
             check_interval_hours: 24,

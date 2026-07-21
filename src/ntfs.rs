@@ -188,8 +188,8 @@ pub fn scan_mft(handle: HANDLE) -> Result<Vec<FileEntry>, String> {
         high_usn: usn_journal_data.next_usn,
     };
 
-    let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
-    let mut entries = Vec::new();
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB Direct I/O buffer
+    let mut entries = Vec::with_capacity(500_000); // 50만개 사전 용량 할당으로 힙 재할당 병목 소거
 
     loop {
         let mut bytes_returned: u32 = 0;
@@ -318,7 +318,11 @@ pub fn get_absolute_paths(entries: &[FileEntry]) -> Vec<(u64, String, bool)> {
     let mut visited = std::collections::HashSet::new();
 
     for entry in entries {
-        if entry.is_dir && (entry.name.is_empty() || entry.name == "$MFT" || entry.name == "$LogFile") {
+        if entry.name.is_empty() || entry.name == "$MFT" || entry.name == "$LogFile" || entry.name == "$Bitmap"
+            || entry.name == "$Volume" || entry.name == "$AttrDef" || entry.name == "$Boot"
+            || entry.name == "$BadClus" || entry.name == "$Secure" || entry.name == "$UpCase"
+            || entry.name == "$Extend" || entry.name == "$MFTMirr"
+        {
             continue;
         }
 

@@ -14,7 +14,7 @@ pub enum UpdateState {
 impl UpdateState {
     pub fn as_str(&self) -> &'static str {
         match self {
-            UpdateState::Idle => "Idle",
+            UpdateState::Idle => "You are using the latest version (v3.3.0)",
             UpdateState::Checking => "Checking for updates...",
             UpdateState::Downloading => "Downloading...",
             UpdateState::Verifying => "Verifying integrity...",
@@ -22,7 +22,7 @@ impl UpdateState {
             UpdateState::Complete => "Update complete",
             UpdateState::RolledBack => "Rollback complete (restored)",
             UpdateState::Failed => "Update failed",
-            UpdateState::UpToDate => "You are on the latest version",
+            UpdateState::UpToDate => "You are using the latest version (v3.3.0)",
         }
     }
 }

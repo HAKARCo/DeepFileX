@@ -9,8 +9,11 @@ pub mod state;
 pub mod installer;
 
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "auto-update")]
 use std::thread;
+#[cfg(feature = "auto-update")]
 use std::path::PathBuf;
+#[cfg(feature = "auto-update")]
 use crate::update::error::{UpdateError, Result};
 pub use crate::update::state::{UpdateState, UpdateContext};
 pub use crate::update::config::UpdateConfig;

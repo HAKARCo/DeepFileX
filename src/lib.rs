@@ -5,6 +5,7 @@ pub mod crypto;
 pub mod db;
 pub mod parser;
 pub mod update;
+pub mod blackbox;
 
 pub fn scan_volume(volume: &str) -> Result<Vec<(u64, String, bool)>, String> {
     // 1. Try with GENERIC_READ first (necessary for FSCTL_QUERY_USN_JOURNAL validation)
@@ -109,11 +110,16 @@ pub fn walk_directory(root: &str) -> Vec<(String, u64, u64, bool)> {
             let path = e.path();
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "Windows" || name == "Program Files" || name == "Program Files (x86)"
-                        || name == "$Recycle.Bin" || name == "System Volume Information"
-                        || name == "AppData" || name == "node_modules" || name == ".git"
-                        || name == "target" || name == ".cargo" || name == ".rustup"
-                        || name == "Local" || name == "Roaming" || name.starts_with('.')
+                    if name.eq_ignore_ascii_case("Windows") || name.eq_ignore_ascii_case("Program Files")
+                        || name.eq_ignore_ascii_case("Program Files (x86)") || name.eq_ignore_ascii_case("$Recycle.Bin")
+                        || name.eq_ignore_ascii_case("System Volume Information") || name.eq_ignore_ascii_case("AppData")
+                        || name.eq_ignore_ascii_case("node_modules") || name.eq_ignore_ascii_case(".git")
+                        || name.eq_ignore_ascii_case("target") || name.eq_ignore_ascii_case(".cargo")
+                        || name.eq_ignore_ascii_case(".rustup") || name.eq_ignore_ascii_case("Local")
+                        || name.eq_ignore_ascii_case("Roaming") || name.eq_ignore_ascii_case("Temp")
+                        || name.eq_ignore_ascii_case("$WINDOWS.~BT") || name.eq_ignore_ascii_case("$WinREAgent")
+                        || name.eq_ignore_ascii_case("Config.Msi") || name.eq_ignore_ascii_case("MSOCache")
+                        || name.eq_ignore_ascii_case("Recovery") || name.starts_with('.')
                     {
                         return false;
                     }

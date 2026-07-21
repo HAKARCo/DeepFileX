@@ -22,7 +22,7 @@ pub fn run_silent_installer(installer_path: &Path) -> Result<()> {
             // 인스톨러가 백그라운드로 안전하게 스폰되었으므로, 새 버전을 위해 현재 프로세스는 즉시 종료해.
             std::process::exit(0);
         }
-        Err(e) => {
+        Err(_e) => {
             Err(UpdateError::InstallerFailed(-1))
         }
     }
